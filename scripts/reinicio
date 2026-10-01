@@ -1,0 +1,10 @@
+#!/bin/bash
+# Comprueba si hay un reinicio pendiente tras aplicar parches
+# Instalación: cp reinicio /usr/local/bin/ && chmod 755 /usr/local/bin/reinicio
+if [ -f /var/run/reboot-required ]; then
+    echo "⚠️  Reinicio pendiente. Paquetes que lo requieren:"
+    cat /var/run/reboot-required.pkgs 2>/dev/null
+else
+    echo "✅ Sin reinicio pendiente"
+fi
+echo "Kernel en ejecución: $(uname -r)"

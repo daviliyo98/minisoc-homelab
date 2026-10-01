@@ -1,0 +1,10 @@
+// Parches automáticos del host (ventana de mantenimiento a las 04:00)
+// Ubicación: /etc/apt/apt.conf.d/52unattended-upgrades-local
+// Añade el repositorio de Raspberry Pi (kernel y firmware), que no se incluye por defecto.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Raspberry Pi Foundation,codename=${distro_codename},label=Raspberry Pi Foundation";
+};
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:00";

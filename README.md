@@ -14,6 +14,7 @@ flowchart LR
     D -. fuga IPv6 .-> X[DNS del router ISP]
     PT[Portainer CE] -. gestiona .-> P
     PT -. gestiona .-> U
+    NE[node-exporter] --> PR[Prometheus] --> G[Grafana]
 ```
 
 | Componente | Función | Estado |
@@ -22,6 +23,8 @@ flowchart LR
 | Pi-hole v6 | Sinkhole DNS: publicidad, rastreo y amenazas | ✅ |
 | Unbound | Resolución recursiva sin terceros, validación DNSSEC | ✅ |
 | Portainer CE | Gestión de contenedores | ✅ (pendiente de hardening) |
+| Prometheus + node-exporter | Métricas del host (línea base) | ✅ |
+| Grafana | Dashboards y alertas | ✅ |
 
 ### Listas de bloqueo
 
@@ -41,6 +44,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 | [HL-001](docs/hallazgos/HL-001-fuga-dns-ipv6.md) | Fuga de DNS por IPv6: el router del ISP anuncia su propio DNS | Alta | Mitigado parcialmente |
 | [HL-002](docs/hallazgos/HL-002-parche-no-aplicado.md) | Kernel parcheado en disco pero vulnerable en memoria | Media | Resuelto |
 | [HL-003](docs/hallazgos/HL-003-evasion-dns-iphone.md) | Evasión del DNS en iOS mediante cifrado (iCloud Private Relay) | Media | En investigación |
+| [HL-004](docs/hallazgos/HL-004-limites-memoria-ignorados.md) | Límites de memoria de contenedores descartados en silencio | Media | Remediado |
 
 ## Runbooks
 
@@ -64,7 +68,8 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 - [ ] Hardening del host: SSH con claves, UFW, `unattended-upgrades`, mínimo privilegio
 - [ ] Migración del sistema a SSD
 - [ ] Detección y respuesta: CrowdSec
-- [ ] Observabilidad: Grafana + Prometheus + Loki (mini-SIEM)
+- [x] Métricas: Prometheus + node-exporter + Grafana
+- [ ] Logs: Loki + Grafana Alloy (mini-SIEM)
 - [ ] Segmentación de red con VLANs (IoT / invitados / confianza)
 
 ## Estructura del repositorio
