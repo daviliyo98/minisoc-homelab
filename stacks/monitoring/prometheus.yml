@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 30s        # 30 s en lugar de 15 s: la mitad de escrituras en disco
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          host: raspberrypi

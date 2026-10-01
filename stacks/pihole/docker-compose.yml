@@ -1,0 +1,17 @@
+# Pi-hole v6 en red host (visibilidad real de la IP de cada cliente)
+# La contraseña se lee de .env (excluido del repositorio). Ver .env.example.
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    network_mode: host
+    environment:
+      TZ: "Europe/Madrid"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD}"
+      FTLCONF_dns_upstreams: "127.0.0.1#5335"       # Unbound
+      FTLCONF_dns_listeningMode: "LOCAL"             # solo responde a la red local
+      FTLCONF_dns_specialDomains_iCloudPrivateRelay: "true"
+    volumes:
+      - ./etc-pihole:/etc/pihole
+    # Sin NET_ADMIN: Pi-hole no actúa como DHCP (mínimo privilegio)
+    restart: unless-stopped

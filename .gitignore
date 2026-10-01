@@ -1,0 +1,23 @@
+# Secretos: nunca al repositorio
+.env
+*.env
+!.env.example
+*.pem
+*.key
+*.pub
+*.p12
+*.kdbx
+
+# Backups (contienen claves y hashes)
+*.tar.gz
+*.zip
+*teleporter*
+*backup*
+portainer.db
+*.db
+
+# Datos de los contenedores
+etc-pihole/
+data/
+logs/
+*.log

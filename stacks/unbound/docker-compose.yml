@@ -1,0 +1,10 @@
+# Unbound: resolutor DNS recursivo con validación DNSSEC.
+# Publicado solo en loopback: únicamente Pi-hole (en el mismo host) puede consultarlo.
+services:
+  unbound:
+    image: klutchell/unbound:latest
+    container_name: unbound
+    ports:
+      - "127.0.0.1:5335:53/tcp"
+      - "127.0.0.1:5335:53/udp"
+    restart: unless-stopped
