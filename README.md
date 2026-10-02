@@ -65,7 +65,9 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 - [x] Parcheo del sistema y limpieza
 - [x] Backups verificados de Pi-hole y Portainer
 - [ ] Cerrar la fuga IPv6 en toda la red (router neutro con OpenWrt/OPNsense)
-- [ ] Hardening del host: SSH con claves, UFW, `unattended-upgrades`, mínimo privilegio
+- [x] Parches automáticos con ventana de mantenimiento (`unattended-upgrades`, reinicio a las 04:00)
+- [x] Acceso remoto Zero Trust con Tailscale (sin puertos abiertos a Internet)
+- [ ] Hardening del host: SSH con claves, UFW, mínimo privilegio
 - [ ] Migración del sistema a SSD
 - [ ] Detección y respuesta: CrowdSec
 - [x] Métricas: Prometheus + node-exporter + Grafana
@@ -76,6 +78,8 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 
 ```
 stacks/        Docker Compose de cada servicio (sin secretos)
+host/          Configuración del sistema operativo del host
+scripts/       Utilidades de operación
 docs/hallazgos Informes de hallazgos
 docs/runbooks  Procedimientos de verificación y operación
 ```

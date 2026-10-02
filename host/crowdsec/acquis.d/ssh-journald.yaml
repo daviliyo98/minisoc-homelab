@@ -1,0 +1,9 @@
+# CrowdSec: lectura de los logs de SSH desde journald.
+# Raspberry Pi OS no escribe /var/log/auth.log (no trae rsyslog), así que
+# sin esta fuente CrowdSec no ve ningún intento de acceso por SSH.
+# Ubicación: /etc/crowdsec/acquis.d/ssh-journald.yaml
+source: journalctl
+journalctl_filter:
+  - "_SYSTEMD_UNIT=ssh.service"
+labels:
+  type: syslog
