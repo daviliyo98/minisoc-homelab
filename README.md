@@ -15,6 +15,8 @@ flowchart LR
     PT[Portainer CE] -. gestiona .-> P
     PT -. gestiona .-> U
     NE[node-exporter] --> PR[Prometheus] --> G[Grafana]
+    J[journald SSH] --> CS[CrowdSec] --> FW[Bouncer nftables]
+    CS -->|métricas 172.17.0.1:6060| PR
 ```
 
 | Componente | Función | Estado |
@@ -25,6 +27,8 @@ flowchart LR
 | Portainer CE | Gestión de contenedores | ✅ (pendiente de hardening) |
 | Prometheus + node-exporter | Métricas del host (línea base) | ✅ |
 | Grafana | Dashboards y alertas | ✅ |
+| CrowdSec + firewall bouncer (nftables) | Detección de ataques y bloqueo automático, inteligencia colaborativa; métricas en Grafana | ✅ |
+| websec-scanner (FastAPI) | Analizador pasivo de postura de seguridad web (cabeceras, TLS, security.txt) | ✅ |
 
 ### Listas de bloqueo
 
@@ -45,6 +49,9 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 | [HL-002](docs/hallazgos/HL-002-parche-no-aplicado.md) | Kernel parcheado en disco pero vulnerable en memoria | Media | Resuelto |
 | [HL-003](docs/hallazgos/HL-003-evasion-dns-iphone.md) | Evasión del DNS en iOS mediante cifrado (iCloud Private Relay) | Media | En investigación |
 | [HL-004](docs/hallazgos/HL-004-limites-memoria-ignorados.md) | Límites de memoria de contenedores descartados en silencio | Media | Remediado |
+| [HL-005](docs/hallazgos/HL-005-crowdsec-sin-logs-ssh.md) | Sistema de detección activo pero sin visibilidad de los logs de SSH | Alta | Remediado |
+| [HL-006](docs/hallazgos/HL-006-contenedor-sin-salida-ipv6.md) | Contenedor sin salida de red por preferencia de IPv6 | Media | Resuelto |
+| [HL-007](docs/hallazgos/HL-007-falso-positivo-securitytxt.md) | Falso positivo en la detección de security.txt (soft-404) | Media | Resuelto |
 
 ## Runbooks
 
@@ -58,6 +65,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 - **Gestión del cambio:** despliegue aislado, pruebas, rollback, backups verificados (regla 3-2-1)
 - **Contenedores:** Docker, Compose, Portainer, principio de mínimo privilegio
 - **Gestión de secretos:** ningún secreto en el repositorio; variables en `.env` excluido
+- **Desarrollo seguro:** API propia en Python/FastAPI, contenedor sin privilegios y solo lectura, autenticación por API key
 
 ## Hoja de ruta
 
@@ -69,7 +77,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 - [x] Acceso remoto Zero Trust con Tailscale (sin puertos abiertos a Internet)
 - [ ] Hardening del host: SSH con claves, UFW, mínimo privilegio
 - [ ] Migración del sistema a SSD
-- [ ] Detección y respuesta: CrowdSec
+- [x] Detección y respuesta: CrowdSec
 - [x] Métricas: Prometheus + node-exporter + Grafana
 - [ ] Logs: Loki + Grafana Alloy (mini-SIEM)
 - [ ] Segmentación de red con VLANs (IoT / invitados / confianza)
@@ -78,8 +86,10 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 
 ```
 stacks/        Docker Compose de cada servicio (sin secretos)
+apps/          Aplicaciones propias (websec-scanner)
 host/          Configuración del sistema operativo del host
 scripts/       Utilidades de operación
+subir.ps1      Publicación en GitHub con control de secretos
 docs/hallazgos Informes de hallazgos
 docs/runbooks  Procedimientos de verificación y operación
 ```

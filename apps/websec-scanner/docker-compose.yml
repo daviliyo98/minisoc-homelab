@@ -1,0 +1,21 @@
+# websec-scanner: analizador pasivo de postura de seguridad web.
+# Publicado solo en la LAN; requiere API_KEY (ver .env.example).
+services:
+  websec-scanner:
+    build: .
+    container_name: websec-scanner
+    dns:
+      - 172.17.0.1   # resuelve a través del Pi-hole del host
+    environment:
+      API_KEY: "${API_KEY}"
+    ports:
+      - "192.168.1.20:8001:8000"   # accesible solo desde tu red, puerto 8001
+    read_only: true                # sistema de archivos de solo lectura
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    restart: unless-stopped

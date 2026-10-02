@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>websec-scanner · MINISOC</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1e2740; --border:#2a3550;
+    --text:#e6ebf5; --muted:#8b97b2; --accent:#4f8cff;
+    --alta:#ff5a5a; --media:#ff9f43; --baja:#ffd94a; --ok:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5}
+  .wrap{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+  header h1{margin:0 0 4px;font-size:1.5rem}
+  header p{margin:0 0 24px;color:var(--muted);font-size:.9rem}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+        padding:20px;margin-bottom:20px}
+  label{display:block;font-size:.8rem;color:var(--muted);margin:0 0 6px}
+  input{width:100%;padding:11px 13px;background:var(--panel2);border:1px solid var(--border);
+        border-radius:8px;color:var(--text);font-size:.95rem}
+  input:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:200px}
+  button{margin-top:16px;width:100%;padding:12px;background:var(--accent);color:#fff;
+         border:0;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .hidden{display:none}
+  .score{display:flex;align-items:center;gap:20px;margin-bottom:16px}
+  .score .num{font-size:3rem;font-weight:800;line-height:1}
+  .meta{color:var(--muted);font-size:.85rem}
+  .meta b{color:var(--text)}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.72rem;
+         font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#101520}
+  .b-alta{background:var(--alta)} .b-media{background:var(--media)} .b-baja{background:var(--baja)}
+  .finding{display:flex;gap:12px;padding:13px 0;border-top:1px solid var(--border)}
+  .finding:first-child{border-top:0}
+  .finding .body{flex:1}
+  .finding .title{font-weight:600}
+  .finding .detail{color:var(--muted);font-size:.85rem;margin-top:2px}
+  .finding .fix{font-size:.82rem;margin-top:5px}
+  .finding .fix b{color:var(--ok)}
+  .err{color:var(--alta);font-weight:600}
+  .sectxt{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+          padding:12px 14px;margin:10px 0 16px;white-space:pre-wrap;word-break:break-word;
+          font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;color:var(--text)}
+  .sectxt a{color:var(--accent)}
+  .tag-ok{color:var(--ok);font-weight:700}
+  .foot{color:var(--muted);font-size:.78rem;text-align:center;margin-top:28px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🛡️ websec-scanner</h1>
+    <p>Análisis pasivo de postura de seguridad web · MINISOC homelab</p>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="url">URL a analizar</label>
+        <input id="url" type="text" placeholder="https://ejemplo.com" autocomplete="off">
+      </div>
+      <div>
+        <label for="key">Clave de API</label>
+        <input id="key" type="password" placeholder="x-api-key" autocomplete="off">
+      </div>
+    </div>
+    <button id="go">Analizar</button>
+  </div>
+
+  <div id="result" class="card hidden"></div>
+
+  <p class="foot">Solo sistemas propios o con autorización explícita. Análisis pasivo: no sondea ni ataca.</p>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const sevClass = s => ({alta:"b-alta",media:"b-media",baja:"b-baja"}[s] || "b-baja");
+const scoreColor = n => n>=80?"var(--ok)":n>=50?"var(--media)":"var(--alta)";
+
+// Recuerda la clave en el navegador para no reescribirla cada vez
+try { $("#key").value = localStorage.getItem("websec_key") || ""; } catch(e){}
+
+async function scan(){
+  const url = $("#url").value.trim();
+  const key = $("#key").value.trim();
+  const box = $("#result");
+  if(!url){ return; }
+  try { localStorage.setItem("websec_key", key); } catch(e){}
+
+  $("#go").disabled = true; $("#go").textContent = "Analizando…";
+  box.classList.remove("hidden");
+  box.innerHTML = '<span class="meta">Escaneando ' + url + '…</span>';
+
+  try{
+    const r = await fetch("/scan", {
+      method:"POST",
+      headers:{"content-type":"application/json","x-api-key":key},
+      body: JSON.stringify({url})
+    });
+    const data = await r.json();
+    if(!r.ok){
+      box.innerHTML = '<p class="err">Error '+r.status+': '+(data.detail||"fallo")+'</p>';
+      return;
+    }
+    render(data);
+  }catch(e){
+    box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
+  }finally{
+    $("#go").disabled = false; $("#go").textContent = "Analizar";
+  }
+}
+
+function render(d){
+  const tls = d.tls||{};
+  const st = d.security_txt||{};
+  let h = '';
+  h += '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>';
+  h += '<div><div style="font-weight:600">'+d.objetivo+'</div>';
+  h += '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas</div></div></div>';
+
+  h += '<div class="meta" style="margin-bottom:14px">';
+  if(tls.ok){ h += 'TLS: <b>'+tls.version+'</b> · caduca en <b>'+tls.dias_para_caducar+' días</b> · emisor <b>'+(tls.emisor||"?")+'</b><br>'; }
+  if(st.existe){
+    h += 'security.txt: <span class="tag-ok">sí ('+st.ruta+')</span> — esta web acepta reportes de seguridad</div>';
+    // Enlaza las URLs del contenido para poder abrir la Policy/Contact
+    const esc = (st.contenido||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    const linked = esc.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    h += '<div class="sectxt">'+linked+'</div>';
+  } else {
+    h += 'security.txt: <b>no</b> — sin canal público de reporte</div>';
+  }
+
+  (d.hallazgos||[]).forEach(f=>{
+    h += '<div class="finding"><span class="badge '+sevClass(f.severidad)+'">'+f.severidad+'</span>';
+    h += '<div class="body"><div class="title">'+f.titulo+'</div>';
+    h += '<div class="detail">'+f.detalle+'</div>';
+    h += '<div class="fix"><b>Solución:</b> '+f.remediacion+'</div></div></div>';
+  });
+  if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración.</p>'; }
+  $("#result").innerHTML = h;
+}
+
+$("#go").addEventListener("click", scan);
+$("#url").addEventListener("keydown", e=>{ if(e.key==="Enter") scan(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# /etc/crowdsec/config.yaml.local
+# Publica las métricas de Prometheus en la IP de docker0 para que el contenedor
+# de Prometheus pueda leerlas sin exponerlas en la red local.
+prometheus:
+  listen_addr: 172.17.0.1
