@@ -4,7 +4,7 @@
 |---|---|
 | Fecha | 2026-09-29 |
 | Severidad | Media |
-| Activo afectado | iPhone (192.168.1.201) |
+| Activo afectado | iPhone (192.168.1.XXX) |
 | Estado | En investigación |
 
 ## Resumen
@@ -17,14 +17,14 @@ Correlación en directo entre el endpoint y el sensor: se genera un evento conoc
 
 ```bash
 docker exec pihole tail -f /var/log/pihole/pihole.log \
-  | grep --line-buffered -E "192.168.1.201|doubleclick"
+  | grep --line-buffered -E "192.168.1.XXX|doubleclick"
 ```
 
 ## Evidencia
 
 ```
-query[A]     mask.icloud.com      from 192.168.1.201
-query[HTTPS] fonts.googleapis.com from 192.168.1.201
+query[A]     mask.icloud.com      from 192.168.1.XXX
+query[HTTPS] fonts.googleapis.com from 192.168.1.XXX
 ```
 
 No aparece **ninguna** consulta a `doubleclick.net`, a pesar de haber cargado la página.

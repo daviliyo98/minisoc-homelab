@@ -18,7 +18,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 
-from . import checks
+from . import checks, mailcheck
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
@@ -68,6 +68,21 @@ def home() -> str:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+class MailScanRequest(BaseModel):
+    domain: str
+
+
+@app.post("/scan-mail")
+def scan_mail(req: MailScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
+    """Analiza la postura de seguridad del correo de un dominio (SPF/DKIM/DMARC).
+
+    Responde a: ¿puede suplantarse este dominio para enviar correo en su nombre?
+    Endpoint síncrono: dns.resolver es bloqueante y FastAPI lo ejecuta en un hilo.
+    """
+    _auth(x_api_key)
+    return mailcheck.scan(req.domain)
 
 
 @app.post("/scan")
