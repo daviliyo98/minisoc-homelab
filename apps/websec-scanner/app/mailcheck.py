@@ -11,6 +11,7 @@ Referencias: RFC 7208 (SPF), RFC 6376 (DKIM), RFC 7489 (DMARC).
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 import dns.resolver
@@ -64,6 +65,14 @@ def _clean_domain(value: str) -> str:
 # --------------------------------------------------------------------------- #
 #  SPF
 # --------------------------------------------------------------------------- #
+def _all_qualifier(rec_low: str) -> str | None:
+    """Devuelve el cualificador del mecanismo 'all' de un registro SPF, si lo hay."""
+    for q in ("-all", "~all", "?all", "+all"):
+        if q in rec_low:
+            return q
+    return None
+
+
 def check_spf(domain: str) -> dict:
     findings: list[dict] = []
     records = [t for t in _txt(domain) if t.lower().startswith("v=spf1")]
@@ -86,16 +95,17 @@ def check_spf(domain: str) -> dict:
         })
 
     rec = records[0].lower()
-    if "-all" in rec:
-        qual = "-all"
-    elif "~all" in rec:
-        qual = "~all"
-    elif "?all" in rec:
-        qual = "?all"
-    elif "+all" in rec:
-        qual = "+all"
-    else:
-        qual = None
+    qual = _all_qualifier(rec)
+    delegado = None
+    # Si el registro no trae 'all' propio pero delega con 'redirect=', seguimos un
+    # salto y leemos la política efectiva del destino (p. ej. gmail -> _spf.google.com).
+    if qual is None:
+        m = re.search(r"redirect=([^\s]+)", rec)
+        if m:
+            delegado = m.group(1).rstrip(".")
+            tgt = [t for t in _txt(delegado) if t.lower().startswith("v=spf1")]
+            if tgt:
+                qual = _all_qualifier(tgt[0].lower())
 
     if qual == "+all":
         findings.append({
@@ -112,7 +122,8 @@ def check_spf(domain: str) -> dict:
             "remediacion": "Terminar el SPF en '-all' (recomendado) o '~all'.",
         })
 
-    return {"presente": True, "cualificador": qual, "registro": records[0], "findings": findings}
+    return {"presente": True, "cualificador": qual, "delegado_en": delegado,
+            "registro": records[0], "findings": findings}
 
 
 # --------------------------------------------------------------------------- #
