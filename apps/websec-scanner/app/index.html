@@ -28,10 +28,17 @@
          border:0;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
   .hidden{display:none}
+  /* Pestañas Web / Correo */
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{flex:1;margin-top:0;background:var(--panel);border:1px solid var(--border);color:var(--muted);
+       font-size:.92rem;padding:10px;border-radius:8px;font-weight:600}
+  .tab.active{background:var(--panel2);color:var(--text);border-color:var(--accent)}
   .score{display:flex;align-items:center;gap:20px;margin-bottom:16px}
   .score .num{font-size:3rem;font-weight:800;line-height:1}
   .meta{color:var(--muted);font-size:.85rem}
   .meta b{color:var(--text)}
+  .verdict{border:1px solid;border-radius:8px;padding:11px 14px;margin:0 0 14px;
+           font-weight:600;font-size:.9rem}
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.72rem;
          font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#101520}
   .b-alta{background:var(--alta)} .b-media{background:var(--media)} .b-baja{background:var(--baja)}
@@ -55,21 +62,30 @@
 <div class="wrap">
   <header>
     <h1>🛡️ websec-scanner</h1>
-    <p>Análisis pasivo de postura de seguridad web · MINISOC homelab</p>
+    <p>Análisis pasivo de postura de seguridad · MINISOC homelab</p>
   </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="web">🌐 Web</button>
+    <button class="tab" data-tab="mail">✉️ Correo</button>
+  </div>
 
   <div class="card">
     <div class="row">
-      <div>
+      <div id="url-group">
         <label for="url">URL a analizar</label>
         <input id="url" type="text" placeholder="https://ejemplo.com" autocomplete="off">
+      </div>
+      <div id="domain-group" class="hidden">
+        <label for="domain">Dominio a comprobar (suplantación de correo)</label>
+        <input id="domain" type="text" placeholder="ejemplo.com" autocomplete="off">
       </div>
       <div>
         <label for="key">Clave de API</label>
         <input id="key" type="password" placeholder="x-api-key" autocomplete="off">
       </div>
     </div>
-    <button id="go">Analizar</button>
+    <button id="go">Analizar web</button>
   </div>
 
   <div id="result" class="card hidden"></div>
@@ -81,72 +97,101 @@
 const $ = s => document.querySelector(s);
 const sevClass = s => ({alta:"b-alta",media:"b-media",baja:"b-baja"}[s] || "b-baja");
 const scoreColor = n => n>=80?"var(--ok)":n>=50?"var(--media)":"var(--alta)";
+let tab = "web";
 
 // Recuerda la clave en el navegador para no reescribirla cada vez
 try { $("#key").value = localStorage.getItem("websec_key") || ""; } catch(e){}
 
-async function scan(){
-  const url = $("#url").value.trim();
+// --- Pestañas ---
+document.querySelectorAll(".tab").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    tab = b.dataset.tab;
+    document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
+    $("#url-group").classList.toggle("hidden", tab!=="web");
+    $("#domain-group").classList.toggle("hidden", tab!=="mail");
+    $("#go").textContent = tab==="web" ? "Analizar web" : "Analizar correo";
+    $("#result").classList.add("hidden");
+  });
+});
+
+function sumFindings(h){ return h.map(f=>
+  '<div class="finding"><span class="badge '+sevClass(f.severidad)+'">'+f.severidad+'</span>'+
+  '<div class="body"><div class="title">'+f.titulo+'</div>'+
+  '<div class="detail">'+f.detalle+'</div>'+
+  '<div class="fix"><b>Solución:</b> '+f.remediacion+'</div></div></div>').join("");
+}
+function scoreHead(d){
+  return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
+    '<div><div style="font-weight:600">'+d.objetivo+'</div>'+
+    '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas</div></div></div>';
+}
+
+async function run(){
   const key = $("#key").value.trim();
   const box = $("#result");
-  if(!url){ return; }
+  const isWeb = tab==="web";
+  const target = isWeb ? $("#url").value.trim() : $("#domain").value.trim();
+  if(!target) return;
   try { localStorage.setItem("websec_key", key); } catch(e){}
 
   $("#go").disabled = true; $("#go").textContent = "Analizando…";
   box.classList.remove("hidden");
-  box.innerHTML = '<span class="meta">Escaneando ' + url + '…</span>';
+  box.innerHTML = '<span class="meta">Analizando ' + target + '…</span>';
 
+  const endpoint = isWeb ? "/scan" : "/scan-mail";
+  const payload  = isWeb ? {url: target} : {domain: target};
   try{
-    const r = await fetch("/scan", {
+    const r = await fetch(endpoint, {
       method:"POST",
       headers:{"content-type":"application/json","x-api-key":key},
-      body: JSON.stringify({url})
+      body: JSON.stringify(payload)
     });
     const data = await r.json();
-    if(!r.ok){
-      box.innerHTML = '<p class="err">Error '+r.status+': '+(data.detail||"fallo")+'</p>';
-      return;
-    }
-    render(data);
+    if(!r.ok){ box.innerHTML = '<p class="err">Error '+r.status+': '+(data.detail||"fallo")+'</p>'; return; }
+    isWeb ? renderWeb(data) : renderMail(data);
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
-    $("#go").disabled = false; $("#go").textContent = "Analizar";
+    $("#go").disabled = false; $("#go").textContent = isWeb ? "Analizar web" : "Analizar correo";
   }
 }
 
-function render(d){
-  const tls = d.tls||{};
-  const st = d.security_txt||{};
-  let h = '';
-  h += '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>';
-  h += '<div><div style="font-weight:600">'+d.objetivo+'</div>';
-  h += '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas</div></div></div>';
-
+function renderWeb(d){
+  const tls = d.tls||{}, st = d.security_txt||{};
+  let h = scoreHead(d);
   h += '<div class="meta" style="margin-bottom:14px">';
   if(tls.ok){ h += 'TLS: <b>'+tls.version+'</b> · caduca en <b>'+tls.dias_para_caducar+' días</b> · emisor <b>'+(tls.emisor||"?")+'</b><br>'; }
   if(st.existe){
     h += 'security.txt: <span class="tag-ok">sí ('+st.ruta+')</span> — esta web acepta reportes de seguridad</div>';
-    // Enlaza las URLs del contenido para poder abrir la Policy/Contact
     const esc = (st.contenido||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
     const linked = esc.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
     h += '<div class="sectxt">'+linked+'</div>';
   } else {
     h += 'security.txt: <b>no</b> — sin canal público de reporte</div>';
   }
-
-  (d.hallazgos||[]).forEach(f=>{
-    h += '<div class="finding"><span class="badge '+sevClass(f.severidad)+'">'+f.severidad+'</span>';
-    h += '<div class="body"><div class="title">'+f.titulo+'</div>';
-    h += '<div class="detail">'+f.detalle+'</div>';
-    h += '<div class="fix"><b>Solución:</b> '+f.remediacion+'</div></div></div>';
-  });
+  h += sumFindings(d.hallazgos||[]);
   if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración.</p>'; }
   $("#result").innerHTML = h;
 }
 
-$("#go").addEventListener("click", scan);
-$("#url").addEventListener("keydown", e=>{ if(e.key==="Enter") scan(); });
+function renderMail(d){
+  const spf=d.spf||{}, dm=d.dmarc||{}, dk=d.dkim||{};
+  let h = scoreHead(d);
+  const vc = d.suplantable ? 'var(--alta)' : 'var(--ok)';
+  h += '<div class="verdict" style="border-color:'+vc+';color:'+vc+'">'+(d.suplantable?'⚠ ':'✓ ')+d.veredicto+'</div>';
+  h += '<div class="meta" style="margin-bottom:14px">';
+  h += 'SPF: <b>'+(spf.presente?('sí ('+(spf.cualificador||'sin all')+(spf.delegado_en?', vía '+spf.delegado_en:'')+')'):'no')+'</b> · ';
+  h += 'DMARC: <b>'+(dm.presente?('p='+dm.politica):'no')+'</b> · ';
+  h += 'DKIM: <b>'+(dk.detectado?('sí ('+(dk.selectores||[]).join(", ")+')'):'no detectado')+'</b><br>';
+  h += 'Recibe correo (MX): <b>'+(d.recibe_correo?'sí':'no')+'</b></div>';
+  h += sumFindings(d.hallazgos||[]);
+  if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración de correo.</p>'; }
+  $("#result").innerHTML = h;
+}
+
+$("#go").addEventListener("click", run);
+$("#url").addEventListener("keydown", e=>{ if(e.key==="Enter") run(); });
+$("#domain").addEventListener("keydown", e=>{ if(e.key==="Enter") run(); });
 </script>
 </body>
 </html>
