@@ -338,9 +338,34 @@ def scan(domain: str) -> dict:
         suplantable = True
         veredicto = "SUPLANTABLE: sin SPF ni DMARC, cualquiera puede enviar correo haciéndose pasar por este dominio."
 
+    # Resultado concreto de CADA comprobación (lo que pasa y lo que falta),
+    # no solo los hallazgos. estado: ok | aviso | falta | info
+    comprobaciones = [
+        {"nombre": "SPF", "detalle": (spf.get("cualificador") or "sin all") if spf["presente"] else "no publicado",
+         "estado": "ok" if (spf["presente"] and spf.get("cualificador") in ("-all", "~all"))
+                   else ("aviso" if spf["presente"] else "falta")},
+        {"nombre": "DKIM", "detalle": ("selector: " + ", ".join(dkim["selectores"])) if dkim["detectado"] else "no detectado (no concluyente)",
+         "estado": "ok" if dkim["detectado"] else "info"},
+        {"nombre": "DMARC", "detalle": ("p=" + dmarc["politica"]) if dmarc["presente"] else "no publicado",
+         "estado": ("ok" if dmarc.get("politica") == "reject" else "aviso") if dmarc["presente"] else "falta"},
+        {"nombre": "Informes DMARC (rua)", "detalle": "configurado" if dmarc.get("rua") else "sin rua",
+         "estado": ("ok" if dmarc.get("rua") else "falta") if dmarc["presente"] else "info"},
+        {"nombre": "Recepción de correo (MX)", "detalle": "recibe correo" if tiene_mx else "sin MX",
+         "estado": "ok" if tiene_mx else "info"},
+        {"nombre": "MTA-STS", "detalle": "activo" if mta_sts["presente"] else "no configurado",
+         "estado": "ok" if mta_sts["presente"] else ("falta" if tiene_mx else "info")},
+        {"nombre": "TLS-RPT", "detalle": "activo" if tls_rpt["presente"] else "no configurado",
+         "estado": "ok" if tls_rpt["presente"] else ("falta" if tiene_mx else "info")},
+        {"nombre": "DNSSEC", "detalle": "firmado" if dnssec["dnssec"] else "sin firmar",
+         "estado": "ok" if dnssec["dnssec"] else "aviso"},
+        {"nombre": "BIMI", "detalle": "configurado" if bimi["presente"] else ("oportunidad" if dmarc_enforced else "requiere DMARC activo"),
+         "estado": "ok" if bimi["presente"] else "info"},
+    ]
+
     return {
         "objetivo": domain,
         "puntuacion": nota,
+        "comprobaciones": comprobaciones,
         "suplantable": suplantable,
         "veredicto": veredicto,
         "resumen": {

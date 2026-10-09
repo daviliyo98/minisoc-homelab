@@ -141,6 +141,7 @@ async def check_http(url: str, timeout: float) -> dict:
         "url_final": str(r.url),
         "status": r.status_code,
         "https": str(r.url).startswith("https://"),
+        "cabeceras_seguridad": {h: (h in headers) for h in SECURITY_HEADERS},
         "findings": findings,
     }
 

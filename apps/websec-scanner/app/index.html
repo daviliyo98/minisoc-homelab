@@ -55,6 +55,14 @@
           font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;color:var(--text)}
   .sectxt a{color:var(--accent)}
   .tag-ok{color:var(--ok);font-weight:700}
+  .sectitle{font-weight:700;font-size:.95rem;margin:18px 0 8px}
+  .checks{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:6px}
+  .chk{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid var(--border);font-size:.86rem}
+  .chk:first-child{border-top:0}
+  .chk .st{width:16px;text-align:center;font-weight:800;flex:none}
+  .chk .nm{flex:1}
+  .chk .dt{color:var(--muted);font-size:.8rem;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .st-ok{color:var(--ok)} .st-falta{color:var(--alta)} .st-aviso{color:var(--media)} .st-info{color:var(--muted)}
   .foot{color:var(--muted);font-size:.78rem;text-align:center;margin-top:28px}
 </style>
 </head>
@@ -120,6 +128,14 @@ function sumFindings(h){ return h.map(f=>
   '<div class="detail">'+f.detalle+'</div>'+
   '<div class="fix"><b>Solución:</b> '+f.remediacion+'</div></div></div>').join("");
 }
+const stSym = e => ({ok:"✓",falta:"✗",aviso:"◐",info:"·"}[e] || "·");
+function sumChecks(list){
+  if(!list || !list.length) return "";
+  return '<div class="sectitle">Comprobaciones</div><div class="checks">'+
+    list.map(c=>'<div class="chk"><span class="st st-'+c.estado+'">'+stSym(c.estado)+'</span>'+
+      '<span class="nm">'+c.nombre+'</span><span class="dt">'+(c.detalle||"")+'</span></div>').join("")+
+    '</div>';
+}
 function scoreHead(d){
   return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
     '<div><div style="font-weight:600">'+d.objetivo+'</div>'+
@@ -169,6 +185,8 @@ function renderWeb(d){
   } else {
     h += 'security.txt: <b>no</b> — sin canal público de reporte</div>';
   }
+  h += sumChecks(d.comprobaciones);
+  if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos y mejoras</div>'; }
   h += sumFindings(d.hallazgos||[]);
   if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración.</p>'; }
   $("#result").innerHTML = h;
@@ -184,6 +202,8 @@ function renderMail(d){
   h += 'DMARC: <b>'+(dm.presente?('p='+dm.politica):'no')+'</b> · ';
   h += 'DKIM: <b>'+(dk.detectado?('sí ('+(dk.selectores||[]).join(", ")+')'):'no detectado')+'</b><br>';
   h += 'Recibe correo (MX): <b>'+(d.recibe_correo?'sí':'no')+'</b></div>';
+  h += sumChecks(d.comprobaciones);
+  if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos y mejoras</div>'; }
   h += sumFindings(d.hallazgos||[]);
   if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración de correo.</p>'; }
   $("#result").innerHTML = h;

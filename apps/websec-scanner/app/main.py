@@ -121,9 +121,35 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
     pen = {"alta": 20, "media": 8, "baja": 3}
     nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
 
+    # Resultado concreto de cada comprobación (no solo los hallazgos)
+    cab = http_res.get("cabeceras_seguridad", {})
+    nombres_cab = {
+        "strict-transport-security": "HSTS", "content-security-policy": "CSP",
+        "x-frame-options": "X-Frame-Options", "x-content-type-options": "X-Content-Type-Options",
+        "referrer-policy": "Referrer-Policy", "permissions-policy": "Permissions-Policy",
+    }
+    rh = redir.get("redirige_https")
+    comprobaciones = [
+        {"nombre": "HTTPS", "estado": "ok" if http_res["https"] else "falta",
+         "detalle": "activo" if http_res["https"] else "el sitio no cifra"},
+        {"nombre": "Redirección HTTP→HTTPS",
+         "estado": "ok" if rh else ("aviso" if rh is False else "info"),
+         "detalle": "redirige" if rh else ("no redirige" if rh is False else "no comprobable")},
+        {"nombre": "TLS", "estado": "ok" if tls_res.get("ok") else "falta",
+         "detalle": (f"{tls_res.get('version', '')} · caduca en {tls_res.get('dias_para_caducar', '?')}d") if tls_res.get("ok") else "no disponible"},
+    ]
+    for h, label in nombres_cab.items():
+        comprobaciones.append({"nombre": label, "estado": "ok" if cab.get(h) else "falta",
+                               "detalle": "presente" if cab.get(h) else "ausente"})
+    comprobaciones.append({"nombre": "CAA", "estado": "ok" if caa.get("caa") else "aviso",
+                           "detalle": "presente" if caa.get("caa") else "sin CAA"})
+    comprobaciones.append({"nombre": "security.txt", "estado": "ok" if sectxt.get("existe") else "info",
+                           "detalle": sectxt.get("ruta", "no publicado") if sectxt.get("existe") else "no publicado"})
+
     return {
         "objetivo": http_res["url_final"],
         "puntuacion": nota,
+        "comprobaciones": comprobaciones,
         "resumen": {
             "altas": sum(1 for f in todos if f["severidad"] == "alta"),
             "medias": sum(1 for f in todos if f["severidad"] == "media"),
