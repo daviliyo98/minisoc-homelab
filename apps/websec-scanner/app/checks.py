@@ -14,6 +14,7 @@ import ssl
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+import dns.resolver
 import httpx
 
 # Forzar IPv4: la red interna de Docker (docker0) es solo IPv4. Si el host tiene
@@ -88,14 +89,52 @@ async def check_http(url: str, timeout: float) -> dict:
     # Cookies sin flags de seguridad
     for cookie in r.headers.get_list("set-cookie"):
         low = cookie.lower()
-        faltan = [f for f in ("secure", "httponly") if f not in low]
+        faltan = [f for f in ("secure", "httponly", "samesite") if f not in low]
         if faltan:
             nombre = cookie.split("=", 1)[0]
             findings.append({
                 "severidad": "media",
                 "titulo": f"Cookie '{nombre}' sin flags {', '.join(faltan)}",
-                "detalle": "Una cookie sin Secure/HttpOnly es más fácil de robar.",
+                "detalle": "Una cookie sin Secure/HttpOnly/SameSite es más fácil de robar o de usar en ataques CSRF.",
                 "remediacion": "Añadir los atributos Secure, HttpOnly y SameSite.",
+            })
+
+    # Calidad de HSTS (si está presente)
+    hsts = headers.get("strict-transport-security", "").lower()
+    if hsts:
+        m = re.search(r"max-age=(\d+)", hsts)
+        maxage = int(m.group(1)) if m else 0
+        if maxage < 15552000:  # 6 meses
+            findings.append({
+                "severidad": "baja",
+                "titulo": "HSTS con max-age bajo",
+                "detalle": f"max-age={maxage}s. Un valor corto debilita la protección de HSTS.",
+                "remediacion": "Usar al menos max-age=31536000 (1 año).",
+            })
+        if "includesubdomains" not in hsts:
+            findings.append({
+                "severidad": "baja",
+                "titulo": "HSTS sin includeSubDomains",
+                "detalle": "La protección HSTS no cubre los subdominios.",
+                "remediacion": "Añadir 'includeSubDomains' si todos los subdominios usan HTTPS.",
+            })
+
+    # Calidad de CSP (si está presente): existir no basta, puede ser permisiva
+    csp = headers.get("content-security-policy", "").lower()
+    if csp:
+        debiles = []
+        if "'unsafe-inline'" in csp:
+            debiles.append("'unsafe-inline'")
+        if "'unsafe-eval'" in csp:
+            debiles.append("'unsafe-eval'")
+        if re.search(r"(default-src|script-src)[^;]*\*", csp):
+            debiles.append("comodín '*'")
+        if debiles:
+            findings.append({
+                "severidad": "media",
+                "titulo": "CSP débil",
+                "detalle": "La CSP existe pero permite: " + ", ".join(debiles) + " (reduce la protección frente a XSS).",
+                "remediacion": "Evitar 'unsafe-inline'/'unsafe-eval' y comodines; usar nonces o hashes.",
             })
 
     return {
@@ -104,6 +143,57 @@ async def check_http(url: str, timeout: float) -> dict:
         "https": str(r.url).startswith("https://"),
         "findings": findings,
     }
+
+
+def check_caa(hostname: str) -> dict:
+    """CAA (RFC 8659): limita qué autoridades pueden emitir certificados para el dominio.
+
+    Solo lectura de DNS. Se comprueba el host y su dominio base (dos etiquetas).
+    """
+    findings: list[dict] = []
+    labels = hostname.split(".")
+    candidatos = [hostname]
+    if len(labels) > 2:
+        candidatos.append(".".join(labels[-2:]))
+    encontrado = False
+    for name in candidatos:
+        try:
+            if len(dns.resolver.resolve(name, "CAA")) > 0:
+                encontrado = True
+                break
+        except Exception:
+            continue
+    if not encontrado:
+        findings.append({
+            "severidad": "baja",
+            "titulo": "Sin registro CAA",
+            "detalle": "Cualquier autoridad de certificación puede emitir certificados para este dominio.",
+            "remediacion": "Publicar un registro CAA que autorice solo a tu CA (p. ej. letsencrypt.org).",
+        })
+    return {"caa": encontrado, "findings": findings}
+
+
+async def check_http_redirect(url: str, timeout: float) -> dict:
+    """Comprueba que http:// redirige a https:// (una sola petición GET a http)."""
+    host = urlparse(_normalize(url)).netloc
+    findings: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=False, transport=_ipv4_transport()
+        ) as client:
+            r = await client.get("http://" + host, headers={"User-Agent": "MINISOC-websec-scanner/1.0"})
+        loc = r.headers.get("location", "")
+        redirige = 300 <= r.status_code < 400 and loc.lower().startswith("https://")
+    except Exception:
+        return {"redirige_https": None, "findings": []}  # si http no responde, no concluimos
+    if not redirige:
+        findings.append({
+            "severidad": "media",
+            "titulo": "HTTP no redirige a HTTPS",
+            "detalle": "Quien escriba la dirección sin https:// navega sin cifrado.",
+            "remediacion": "Configurar una redirección 301 permanente de http:// a https://.",
+        })
+    return {"redirige_https": redirige, "findings": findings}
 
 
 def check_tls(hostname: str, timeout: float) -> dict:

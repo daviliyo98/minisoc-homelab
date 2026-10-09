@@ -122,8 +122,24 @@ def check_spf(domain: str) -> dict:
             "remediacion": "Terminar el SPF en '-all' (recomendado) o '~all'.",
         })
 
+    # Nº de búsquedas DNS: el RFC 7208 limita a 10. Pasarse provoca 'permerror'
+    # y muchos receptores lo tratan como si no hubiera SPF.
+    lookups = 0
+    for tok in rec.split():
+        t = tok.lstrip("+-~?").lower()
+        if (t.startswith(("include:", "exists:", "redirect=", "a:", "a/", "mx:", "mx/"))
+                or t in ("a", "mx", "ptr")):
+            lookups += 1
+    if lookups > 10:
+        findings.append({
+            "severidad": "media",
+            "titulo": f"SPF con demasiadas búsquedas DNS ({lookups} > 10)",
+            "detalle": "Superar 10 búsquedas invalida el SPF (permerror, RFC 7208) y deja de proteger.",
+            "remediacion": "Reducir los 'include:' o aplanar el registro (SPF flattening).",
+        })
+
     return {"presente": True, "cualificador": qual, "delegado_en": delegado,
-            "registro": records[0], "findings": findings}
+            "busquedas_dns": lookups, "registro": records[0], "findings": findings}
 
 
 # --------------------------------------------------------------------------- #
@@ -176,7 +192,28 @@ def check_dmarc(domain: str) -> dict:
             "remediacion": "Añadir rua=mailto:dmarc@<dominio> para recibir informes agregados.",
         })
 
-    return {"presente": True, "politica": policy, "rua": has_rua, "registro": rec, "findings": findings}
+    # pct<100: la política solo se aplica a una parte del correo (el resto pasa).
+    pct = tags.get("pct", "")
+    if policy in ("quarantine", "reject") and pct.isdigit() and int(pct) < 100:
+        findings.append({
+            "severidad": "media",
+            "titulo": f"DMARC se aplica solo al {pct}% del correo (pct={pct})",
+            "detalle": "Con pct<100 la política solo afecta a una parte: el resto del correo suplantado pasa.",
+            "remediacion": "Subir pct a 100 cuando los informes estén limpios.",
+        })
+
+    # sp=none: los subdominios quedan sin política aunque el dominio sí la tenga.
+    if policy in ("quarantine", "reject") and tags.get("sp", "").lower() == "none":
+        findings.append({
+            "severidad": "media",
+            "titulo": "Subdominios sin protección (sp=none)",
+            "detalle": "La política de subdominios es 'none': se puede suplantar correo desde cualquier subdominio.",
+            "remediacion": "Quitar sp=none o igualarla a la política principal (p. ej. sp=reject).",
+        })
+
+    return {"presente": True, "politica": policy, "rua": has_rua,
+            "subdominios": tags.get("sp"), "pct": tags.get("pct", "100"),
+            "registro": rec, "findings": findings}
 
 
 # --------------------------------------------------------------------------- #
@@ -201,6 +238,68 @@ def check_dkim(domain: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+#  Cifrado y verificación del transporte de correo (pasivo, solo DNS)
+# --------------------------------------------------------------------------- #
+def check_mta_sts(domain: str, tiene_mx: bool) -> dict:
+    """MTA-STS (RFC 8461): exige que el correo ENTRANTE llegue cifrado por TLS."""
+    recs = [t for t in _txt(f"_mta-sts.{domain}") if t.lower().startswith("v=stsv1")]
+    findings: list[dict] = []
+    if tiene_mx and not recs:
+        findings.append({
+            "severidad": "baja",
+            "titulo": "Sin MTA-STS",
+            "detalle": "No se exige cifrado TLS al correo entrante: un atacante en la red podría degradar la conexión.",
+            "remediacion": "Publicar el registro _mta-sts y la política en https://mta-sts.<dominio>/.well-known/mta-sts.txt.",
+        })
+    return {"presente": bool(recs), "findings": findings}
+
+
+def check_tls_rpt(domain: str, tiene_mx: bool) -> dict:
+    """TLS-RPT (RFC 8460): informes de fallos de cifrado en la entrega de correo."""
+    recs = [t for t in _txt(f"_smtp._tls.{domain}") if t.lower().startswith("v=tlsrptv1")]
+    findings: list[dict] = []
+    if tiene_mx and not recs:
+        findings.append({
+            "severidad": "baja",
+            "titulo": "Sin TLS-RPT",
+            "detalle": "No recibes informes cuando falla el cifrado TLS al entregar tu correo: pierdes visibilidad.",
+            "remediacion": "Publicar _smtp._tls.<dominio> con v=TLSRPTv1 y un destino rua de informes.",
+        })
+    return {"presente": bool(recs), "findings": findings}
+
+
+def check_dnssec(domain: str) -> dict:
+    """DNSSEC: firma criptográfica del DNS. Sin él, las respuestas se pueden falsificar."""
+    try:
+        firmado = len(_RESOLVER.resolve(domain, "DNSKEY")) > 0
+    except Exception:
+        firmado = False
+    findings: list[dict] = []
+    if not firmado:
+        findings.append({
+            "severidad": "baja",
+            "titulo": "Dominio sin DNSSEC",
+            "detalle": "Sin DNSSEC las respuestas DNS no están firmadas y pueden falsificarse (cache poisoning).",
+            "remediacion": "Activar DNSSEC en el registrador o proveedor de DNS.",
+        })
+    return {"dnssec": firmado, "findings": findings}
+
+
+def check_bimi(domain: str, dmarc_enforced: bool) -> dict:
+    """BIMI: muestra el logo de marca en la bandeja. Solo tiene sentido con DMARC activo."""
+    recs = [t for t in _txt(f"default._bimi.{domain}") if t.lower().startswith("v=bimi1")]
+    findings: list[dict] = []
+    if dmarc_enforced and not recs:
+        findings.append({
+            "severidad": "baja",
+            "titulo": "Oportunidad: sin BIMI",
+            "detalle": "Ya tienes DMARC activo; BIMI mostraría tu logo junto a tus correos (más confianza y marca).",
+            "remediacion": "Publicar default._bimi.<dominio> con la URL de tu logo SVG (y, opcionalmente, un VMC).",
+        })
+    return {"presente": bool(recs), "findings": findings}
+
+
+# --------------------------------------------------------------------------- #
 #  Agregado + veredicto de suplantación
 # --------------------------------------------------------------------------- #
 def scan(domain: str) -> dict:
@@ -209,8 +308,15 @@ def scan(domain: str) -> dict:
     dmarc = check_dmarc(domain)
     dkim = check_dkim(domain)
     mx = _mx(domain)
+    tiene_mx = bool(mx)
+    dmarc_enforced = dmarc.get("presente") and dmarc.get("politica") in ("quarantine", "reject")
+    mta_sts = check_mta_sts(domain, tiene_mx)
+    tls_rpt = check_tls_rpt(domain, tiene_mx)
+    dnssec = check_dnssec(domain)
+    bimi = check_bimi(domain, dmarc_enforced)
 
-    todos = spf["findings"] + dmarc["findings"] + dkim["findings"]
+    todos = (spf["findings"] + dmarc["findings"] + dkim["findings"]
+             + mta_sts["findings"] + tls_rpt["findings"] + dnssec["findings"] + bimi["findings"])
     orden = {"alta": 0, "media": 1, "baja": 2}
     todos.sort(key=lambda f: orden.get(f["severidad"], 9))
 
@@ -245,6 +351,10 @@ def scan(domain: str) -> dict:
         "spf": {k: v for k, v in spf.items() if k != "findings"},
         "dmarc": {k: v for k, v in dmarc.items() if k != "findings"},
         "dkim": {k: v for k, v in dkim.items() if k != "findings"},
+        "mta_sts": {k: v for k, v in mta_sts.items() if k != "findings"},
+        "tls_rpt": {k: v for k, v in tls_rpt.items() if k != "findings"},
+        "dnssec": dnssec["dnssec"],
+        "bimi": {k: v for k, v in bimi.items() if k != "findings"},
         "mx": mx,
         "recibe_correo": bool(mx),
         "hallazgos": todos,

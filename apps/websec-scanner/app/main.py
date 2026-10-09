@@ -109,8 +109,11 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
             "detalle": "El tráfico viaja sin cifrar.",
             "remediacion": "Instalar un certificado y forzar HTTPS."}]}
     sectxt = await checks.check_security_txt(req.url, timeout)
+    caa = checks.check_caa(host) if host else {"caa": None, "findings": []}
+    redir = await checks.check_http_redirect(req.url, timeout)
 
-    todos = http_res["findings"] + tls_res.get("findings", [])
+    todos = (http_res["findings"] + tls_res.get("findings", [])
+             + caa["findings"] + redir["findings"])
     orden = {"alta": 0, "media": 1, "baja": 2}
     todos.sort(key=lambda f: orden.get(f["severidad"], 9))
 
@@ -128,6 +131,8 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
         },
         "tls": {k: v for k, v in tls_res.items() if k != "findings"},
         "security_txt": sectxt,
+        "caa": caa.get("caa"),
+        "redirige_https": redir.get("redirige_https"),
         "hallazgos": todos,
         "aviso": "Análisis pasivo. Escanee solo sistemas propios o autorizados.",
     }
