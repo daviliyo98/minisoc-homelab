@@ -383,5 +383,8 @@ def scan(domain: str) -> dict:
         "mx": mx,
         "recibe_correo": bool(mx),
         "hallazgos": todos,
-        "aviso": "Análisis pasivo de DNS público. Comprueba solo dominios propios o autorizados.",
+        "aviso": "Diagnóstico pasivo de la postura externa de correo (solo DNS público). "
+                 "Útil para detectar configuraciones ausentes o débiles, pero NO sustituye una "
+                 "auditoría interna del servidor ni una prueba de penetración (pentest). "
+                 "Solo dominios propios o autorizados.",
     }

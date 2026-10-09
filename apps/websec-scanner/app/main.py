@@ -160,5 +160,8 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
         "caa": caa.get("caa"),
         "redirige_https": redir.get("redirige_https"),
         "hallazgos": todos,
-        "aviso": "Análisis pasivo. Escanee solo sistemas propios o autorizados.",
+        "aviso": "Diagnóstico pasivo de la exposición pública de la web. Útil para detectar "
+                 "configuraciones ausentes o débiles, pero NO sustituye una auditoría interna "
+                 "del servidor ni una prueba de penetración (pentest). "
+                 "Escanee solo sistemas propios o autorizados.",
     }
