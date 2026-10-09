@@ -92,6 +92,13 @@ def scan_activo(url: str, timeout_total: float = 180.0) -> dict:
             "remediacion": remediacion,
         })
 
+    # Si Nuclei terminó en error y no produjo hallazgos, NO lo hagamos pasar por
+    # "0 hallazgos" (eso ocultaría un escaneo roto como si fuera un objetivo limpio).
+    if not findings and proc.returncode != 0:
+        err_lines = (proc.stderr or "").strip().splitlines()
+        tail = " | ".join(l.strip() for l in err_lines[-3:]) if err_lines else f"código de salida {proc.returncode}"
+        return {"ok": False, "error": f"Nuclei no completó el escaneo: {tail}", "findings": []}
+
     orden = {"alta": 0, "media": 1, "baja": 2}
     findings.sort(key=lambda f: orden.get(f["severidad"], 9))
     return {"ok": True, "motor": "nuclei", "total": len(findings), "findings": findings}
