@@ -19,5 +19,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # La red IPv6 de este entorno no es alcanzable (ver nota en checks.py). El scanner
+    # pasivo ya fuerza IPv4; aquí lo desactivamos para todo el contenedor, de modo que
+    # Nuclei no intente IPv6 y falle con timeouts ("port closed or filtered").
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+      - net.ipv6.conf.default.disable_ipv6=1
     mem_limit: 512m                # Nuclei necesita algo más de memoria que el modo pasivo
     restart: unless-stopped
