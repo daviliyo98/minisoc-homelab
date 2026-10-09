@@ -25,5 +25,5 @@ services:
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
-    mem_limit: 512m                # Nuclei necesita algo más de memoria que el modo pasivo
+    mem_limit: 1536m               # holgura para Nuclei (6600+ plantillas); la Pi tiene 8 GB
     restart: unless-stopped
