@@ -18,12 +18,14 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 
-from . import checks, mailcheck
+from . import activescan, checks, mailcheck
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
 API_KEY = os.environ.get("API_KEY", "")
+# El modo activo (Nuclei) está DESACTIVADO salvo que se active explícitamente.
+ACTIVE_ENABLED = os.environ.get("ACTIVE_SCAN_ENABLED", "") == "1"
 
 app = FastAPI(
     title="MINISOC websec-scanner",
@@ -164,4 +166,45 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
                  "configuraciones ausentes o débiles, pero NO sustituye una auditoría interna "
                  "del servidor ni una prueba de penetración (pentest). "
                  "Escanee solo sistemas propios o autorizados.",
+    }
+
+
+class ActiveScanRequest(ScanRequest):
+    """Hereda la validación de URL de ScanRequest (incluido el bloqueo anti-SSRF)."""
+    autorizo: bool = False
+
+
+@app.post("/scan-active")
+async def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
+    """Escaneo ACTIVO de vulnerabilidades con Nuclei. Triple candado:
+
+    1) ACTIVE_SCAN_ENABLED=1 en el servidor.  2) autorizo=true en la petición.
+    3) El validador de URL bloquea objetivos internos/loopback.
+    """
+    _auth(x_api_key)
+    if not ACTIVE_ENABLED:
+        raise HTTPException(403, "El modo activo está desactivado. Actívalo con ACTIVE_SCAN_ENABLED=1 en el servidor.")
+    if not req.autorizo:
+        raise HTTPException(400, "El escaneo activo requiere confirmar la autorización (autorizo=true).")
+
+    res = activescan.scan_activo(req.url)
+    if not res.get("ok"):
+        raise HTTPException(503, res.get("error", "No se pudo ejecutar el escaneo activo."))
+
+    todos = res["findings"]
+    pen = {"alta": 20, "media": 8, "baja": 3}
+    nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
+    return {
+        "objetivo": req.url,
+        "modo": "activo",
+        "motor": "nuclei",
+        "puntuacion": nota,
+        "resumen": {
+            "altas": sum(1 for f in todos if f["severidad"] == "alta"),
+            "medias": sum(1 for f in todos if f["severidad"] == "media"),
+            "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
+        },
+        "hallazgos": todos,
+        "aviso": "Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO con "
+                 "autorización explícita y por escrito del titular del sistema.",
     }

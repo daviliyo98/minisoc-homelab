@@ -76,6 +76,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="web">🌐 Web</button>
     <button class="tab" data-tab="mail">✉️ Correo</button>
+    <button class="tab" data-tab="activo">⚡ Activo</button>
   </div>
 
   <div class="card">
@@ -92,6 +93,12 @@
         <label for="key">Clave de API</label>
         <input id="key" type="password" placeholder="x-api-key" autocomplete="off">
       </div>
+    </div>
+    <div id="authz-group" class="hidden" style="margin-top:12px">
+      <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;color:var(--text);font-size:.85rem">
+        <input id="authz" type="checkbox" style="width:auto;margin-top:3px">
+        <span>Confirmo que tengo <b>autorización por escrito</b> del titular para escanear activamente este objetivo. El escaneo activo envía peticiones reales al servidor.</span>
+      </label>
     </div>
     <button id="go">Analizar web</button>
   </div>
@@ -115,9 +122,11 @@ document.querySelectorAll(".tab").forEach(b=>{
   b.addEventListener("click", ()=>{
     tab = b.dataset.tab;
     document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
-    $("#url-group").classList.toggle("hidden", tab!=="web");
+    const needsUrl = (tab==="web" || tab==="activo");
+    $("#url-group").classList.toggle("hidden", !needsUrl);
     $("#domain-group").classList.toggle("hidden", tab!=="mail");
-    $("#go").textContent = tab==="web" ? "Analizar web" : "Analizar correo";
+    $("#authz-group").classList.toggle("hidden", tab!=="activo");
+    $("#go").textContent = tab==="mail" ? "Analizar correo" : (tab==="activo" ? "Escanear (activo)" : "Analizar web");
     $("#result").classList.add("hidden");
   });
 });
@@ -145,17 +154,19 @@ function scoreHead(d){
 async function run(){
   const key = $("#key").value.trim();
   const box = $("#result");
-  const isWeb = tab==="web";
-  const target = isWeb ? $("#url").value.trim() : $("#domain").value.trim();
+  const target = (tab==="mail") ? $("#domain").value.trim() : $("#url").value.trim();
   if(!target) return;
+  if(tab==="activo" && !$("#authz").checked){ alert("Marca la casilla de autorización para el escaneo activo."); return; }
   try { localStorage.setItem("websec_key", key); } catch(e){}
 
-  $("#go").disabled = true; $("#go").textContent = "Analizando…";
+  $("#go").disabled = true; $("#go").textContent = tab==="activo" ? "Escaneando (puede tardar)…" : "Analizando…";
   box.classList.remove("hidden");
   box.innerHTML = '<span class="meta">Analizando ' + target + '…</span>';
 
-  const endpoint = isWeb ? "/scan" : "/scan-mail";
-  const payload  = isWeb ? {url: target} : {domain: target};
+  let endpoint, payload;
+  if(tab==="web"){ endpoint="/scan"; payload={url: target}; }
+  else if(tab==="mail"){ endpoint="/scan-mail"; payload={domain: target}; }
+  else { endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
   try{
     const r = await fetch(endpoint, {
       method:"POST",
@@ -164,11 +175,12 @@ async function run(){
     });
     const data = await r.json();
     if(!r.ok){ box.innerHTML = '<p class="err">Error '+r.status+': '+(data.detail||"fallo")+'</p>'; return; }
-    isWeb ? renderWeb(data) : renderMail(data);
+    if(tab==="web") renderWeb(data); else if(tab==="mail") renderMail(data); else renderActive(data);
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
-    $("#go").disabled = false; $("#go").textContent = isWeb ? "Analizar web" : "Analizar correo";
+    $("#go").disabled = false;
+    $("#go").textContent = tab==="mail" ? "Analizar correo" : (tab==="activo" ? "Escanear (activo)" : "Analizar web");
   }
 }
 
@@ -206,6 +218,15 @@ function renderMail(d){
   if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos y mejoras</div>'; }
   h += sumFindings(d.hallazgos||[]);
   if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin hallazgos. Buena configuración de correo.</p>'; }
+  $("#result").innerHTML = h;
+}
+
+function renderActive(d){
+  let h = scoreHead(d);
+  h += '<div class="verdict" style="border-color:var(--media);color:var(--media)">⚡ Escaneo ACTIVO con Nuclei — solo objetivos autorizados</div>';
+  if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos</div>'; }
+  h += sumFindings(d.hallazgos||[]);
+  if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin vulnerabilidades conocidas detectadas por Nuclei.</p>'; }
   $("#result").innerHTML = h;
 }
 

@@ -8,6 +8,8 @@ services:
       - 172.17.0.1   # resuelve a través del Pi-hole del host
     environment:
       API_KEY: "${API_KEY}"
+      # Modo activo (Nuclei): 0 = desactivado (por defecto), 1 = activado.
+      ACTIVE_SCAN_ENABLED: "${ACTIVE_SCAN_ENABLED:-0}"
     ports:
       - "192.168.1.20:8001:8000"   # accesible solo desde tu red, puerto 8001
     read_only: true                # sistema de archivos de solo lectura
@@ -17,5 +19,5 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    mem_limit: 256m
+    mem_limit: 512m                # Nuclei necesita algo más de memoria que el modo pasivo
     restart: unless-stopped
