@@ -43,8 +43,12 @@ def scan_activo(url: str, timeout_total: float = 180.0) -> dict:
         "nuclei", "-u", url,
         "-jsonl", "-silent",
         "-templates", TEMPLATES_DIR,
-        "-severity", "low,medium,high,critical",
-        "-exclude-tags", "dos,intrusive,fuzz",   # nada destructivo
+        # Solo severidad media o superior: lo que de verdad va en un informe.
+        # (low/info es casi todo ruido, sobre todo en servidores catch-all/soft-404.)
+        "-severity", "medium,high,critical",
+        # Fuera plantillas destructivas Y de simple detección (tech/banners/favicon…),
+        # que son las que dan falsos positivos cuando el objetivo responde 200 a todo.
+        "-exclude-tags", "dos,intrusive,fuzz,tech,detect,favicon,osint",
         "-rate-limit", "20",                      # suave con el objetivo
         "-timeout", "10", "-retries", "1",
         "-disable-update-check", "-no-interactsh", "-stats=false",
