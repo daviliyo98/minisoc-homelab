@@ -175,11 +175,14 @@ class ActiveScanRequest(ScanRequest):
 
 
 @app.post("/scan-active")
-async def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
+def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
     """Escaneo ACTIVO de vulnerabilidades con Nuclei. Triple candado:
 
     1) ACTIVE_SCAN_ENABLED=1 en el servidor.  2) autorizo=true en la petición.
     3) El validador de URL bloquea objetivos internos/loopback.
+
+    Es SÍNCRONO (def, no async) a propósito: Nuclei es bloqueante y FastAPI lo
+    ejecuta en un hilo aparte, sin congelar el servidor durante el escaneo.
     """
     _auth(x_api_key)
     if not ACTIVE_ENABLED:
