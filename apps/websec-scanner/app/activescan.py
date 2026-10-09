@@ -34,7 +34,7 @@ def nuclei_disponible() -> bool:
     return shutil.which("nuclei") is not None
 
 
-def scan_activo(url: str, timeout_total: float = 180.0) -> dict:
+def scan_activo(url: str, timeout_total: float = 150.0) -> dict:
     """Ejecuta Nuclei contra una URL autorizada y devuelve los hallazgos."""
     if not nuclei_disponible():
         return {"ok": False, "error": "Nuclei no está instalado en el contenedor.", "findings": []}
@@ -42,15 +42,16 @@ def scan_activo(url: str, timeout_total: float = 180.0) -> dict:
     cmd = [
         "nuclei", "-u", url,
         "-jsonl", "-silent",
-        "-templates", TEMPLATES_DIR,
-        # Solo severidad media o superior: lo que de verdad va en un informe.
-        # (low/info es casi todo ruido, sobre todo en servidores catch-all/soft-404.)
+        # Enfoque en VULNERABILIDADES reales (no las 6.600 plantillas): mucho más
+        # rápido (segundos en vez de minutos) y son los hallazgos que van en un informe.
+        "-tags", "cve,misconfig,exposure,exposed-panels,default-login,sqli,xss,lfi,rce,ssrf,takeover",
+        # Severidad media o superior: fuera el ruido de low/info.
         "-severity", "medium,high,critical",
-        # Fuera plantillas destructivas Y de simple detección (tech/banners/favicon…),
-        # que son las que dan falsos positivos cuando el objetivo responde 200 a todo.
-        "-exclude-tags", "dos,intrusive,fuzz,tech,detect,favicon,osint",
-        "-rate-limit", "20",                      # suave con el objetivo
-        "-timeout", "10", "-retries", "1",
+        # Nada destructivo.
+        "-exclude-tags", "dos,intrusive,fuzz",
+        # Más paralelismo para terminar rápido, pero suave con el objetivo.
+        "-concurrency", "50", "-bulk-size", "50", "-rate-limit", "50",
+        "-timeout", "8", "-retries", "1",
         "-disable-update-check", "-no-interactsh", "-stats=false",
     ]
     # El contenedor es de solo lectura: Nuclei escribe su config/caché en /tmp (tmpfs).
