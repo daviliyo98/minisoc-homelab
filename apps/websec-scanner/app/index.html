@@ -181,7 +181,7 @@ async function pollActive(jobId, key){
   while(true){
     await new Promise(r=>setTimeout(r, 3000));
     secs += 3;
-    if(secs > 900){ box.innerHTML='<p class="err">El escaneo tardó demasiado (más de 15 min).</p>'; return; }
+    if(secs > 1260){ box.innerHTML='<p class="err">El escaneo tardó demasiado (más de 21 min).</p>'; return; }
     let r, data;
     try{
       r = await fetch("/scan-status/"+jobId, {headers:{"x-api-key":key}});

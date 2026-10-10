@@ -254,7 +254,9 @@ def _log_job(job_id: str, msg: str) -> None:
 def _run_zap_job(job_id: str, url: str, activo: bool) -> None:
     res = zapscan.scan_zap(
         url, activo=activo, base=ZAP_BASE, api_key=ZAP_API_KEY,
-        timeout_total=(900.0 if activo else 360.0), es_publico=checks.es_publico,
+        # Sitios reales de clientes tardan: el pasivo (spider+análisis) puede
+        # necesitar varios minutos. 10 min pasivo / 20 min activo.
+        timeout_total=(1200.0 if activo else 600.0), es_publico=checks.es_publico,
         log=lambda m: _log_job(job_id, m),
     )
     modo = "zap-activo" if activo else "zap-pasivo"
