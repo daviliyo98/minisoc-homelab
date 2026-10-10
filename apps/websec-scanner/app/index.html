@@ -151,6 +151,31 @@ function scoreHead(d){
     '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas</div></div></div>';
 }
 
+// Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
+async function pollActive(jobId, key){
+  const box = $("#result");
+  if(!jobId){ box.innerHTML='<p class="err">No se recibió el identificador del escaneo.</p>'; return; }
+  let secs = 0;
+  while(true){
+    await new Promise(r=>setTimeout(r, 3000));
+    secs += 3;
+    if(secs > 480){ box.innerHTML='<p class="err">El escaneo tardó demasiado (más de 8 min).</p>'; return; }
+    let r, data;
+    try{
+      r = await fetch("/scan-status/"+jobId, {headers:{"x-api-key":key}});
+      data = await r.json();
+    }catch(e){ box.innerHTML='<p class="err">Se perdió la conexión con la API.</p>'; return; }
+    if(!r.ok){ box.innerHTML='<p class="err">Error '+r.status+': '+((data&&data.detail)||"fallo")+'</p>'; return; }
+    if(data.status==="running"){
+      box.innerHTML='<span class="meta">⚡ Escaneando '+(data.objetivo||"")+'… ('+secs+'s) — puede tardar unos minutos</span>';
+      continue;
+    }
+    if(data.status==="error"){ box.innerHTML='<p class="err">El escaneo falló: '+(data.error||"error")+'</p>'; return; }
+    if(data.status==="done"){ renderActive(data.result); return; }
+    box.innerHTML='<p class="err">Estado desconocido: '+data.status+'</p>'; return;
+  }
+}
+
 async function run(){
   const key = $("#key").value.trim();
   const box = $("#result");
@@ -180,7 +205,9 @@ async function run(){
       else if(det && typeof det !== "string") det = JSON.stringify(det);
       box.innerHTML = '<p class="err">Error '+r.status+': '+(det||"fallo")+'</p>'; return;
     }
-    if(tab==="web") renderWeb(data); else if(tab==="mail") renderMail(data); else renderActive(data);
+    if(tab==="web") renderWeb(data);
+    else if(tab==="mail") renderMail(data);
+    else { pollActive(data.job_id, key); return; }   // activo: trabajo en 2º plano
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{

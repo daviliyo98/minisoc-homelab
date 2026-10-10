@@ -9,6 +9,9 @@ Documentación interactiva en /docs una vez arrancado.
 from __future__ import annotations
 
 import os
+import threading
+import time
+import uuid
 from urllib.parse import urlparse
 
 from pathlib import Path
@@ -179,15 +182,47 @@ class ActiveScanRequest(ScanRequest):
     autorizo: bool = False
 
 
+# --- Trabajos en segundo plano para el escaneo activo (es largo) ---
+# El escaneo con Nuclei tarda minutos: no cabe en una petición/respuesta. Se
+# lanza en un hilo, se devuelve un ticket, y el cliente consulta el estado.
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+_MAX_JOBS = 20
+
+
+def _run_active_job(job_id: str, url: str) -> None:
+    res = activescan.scan_activo(url, timeout_total=420.0)
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        if not res.get("ok"):
+            job["status"] = "error"
+            job["error"] = res.get("error", "No se pudo ejecutar el escaneo activo.")
+            return
+        todos = res["findings"]
+        pen = {"alta": 20, "media": 8, "baja": 3}
+        nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
+        job["status"] = "done"
+        job["result"] = {
+            "objetivo": url, "modo": "activo", "motor": "nuclei", "puntuacion": nota,
+            "resumen": {
+                "altas": sum(1 for f in todos if f["severidad"] == "alta"),
+                "medias": sum(1 for f in todos if f["severidad"] == "media"),
+                "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
+            },
+            "hallazgos": todos,
+            "aviso": "Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO "
+                     "con autorización explícita y por escrito del titular del sistema.",
+        }
+
+
 @app.post("/scan-active")
 def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Escaneo ACTIVO de vulnerabilidades con Nuclei. Triple candado:
+    """Lanza un escaneo ACTIVO (Nuclei) en segundo plano y devuelve un ticket.
 
-    1) ACTIVE_SCAN_ENABLED=1 en el servidor.  2) autorizo=true en la petición.
-    3) El validador de URL bloquea objetivos internos/loopback.
-
-    Es SÍNCRONO (def, no async) a propósito: Nuclei es bloqueante y FastAPI lo
-    ejecuta en un hilo aparte, sin congelar el servidor durante el escaneo.
+    Triple candado: 1) ACTIVE_SCAN_ENABLED=1  2) autorizo=true  3) anti-SSRF.
+    El resultado se consulta luego en GET /scan-status/{job_id}.
     """
     _auth(x_api_key)
     if not ACTIVE_ENABLED:
@@ -195,30 +230,33 @@ def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=N
     if not req.autorizo:
         raise HTTPException(400, "El escaneo activo requiere confirmar la autorización (autorizo=true).")
 
-    # Anti-SSRF: el host debe resolver SOLO a IPs públicas (defensa en profundidad,
-    # además del validador de ScanRequest).
     host = urlparse(req.url).hostname or ""
     if not checks.es_publico(host):
         raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
 
-    res = activescan.scan_activo(req.url)
-    if not res.get("ok"):
-        raise HTTPException(503, res.get("error", "No se pudo ejecutar el escaneo activo."))
+    job_id = uuid.uuid4().hex
+    with _JOBS_LOCK:
+        # Poda: si hay demasiados trabajos, quitamos el más antiguo.
+        if len(_JOBS) >= _MAX_JOBS:
+            viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
+            _JOBS.pop(viejo, None)
+        _JOBS[job_id] = {"status": "running", "started": time.time(),
+                         "objetivo": req.url, "result": None, "error": None}
+    threading.Thread(target=_run_active_job, args=(job_id, req.url), daemon=True).start()
+    return {"job_id": job_id, "status": "running", "objetivo": req.url}
 
-    todos = res["findings"]
-    pen = {"alta": 20, "media": 8, "baja": 3}
-    nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
-    return {
-        "objetivo": req.url,
-        "modo": "activo",
-        "motor": "nuclei",
-        "puntuacion": nota,
-        "resumen": {
-            "altas": sum(1 for f in todos if f["severidad"] == "alta"),
-            "medias": sum(1 for f in todos if f["severidad"] == "media"),
-            "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
-        },
-        "hallazgos": todos,
-        "aviso": "Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO con "
-                 "autorización explícita y por escrito del titular del sistema.",
-    }
+
+@app.get("/scan-status/{job_id}")
+def scan_status(job_id: str, x_api_key: str | None = Header(default=None)) -> dict:
+    """Consulta el estado/resultado de un escaneo activo en segundo plano."""
+    _auth(x_api_key)
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Trabajo no encontrado o caducado.")
+        out: dict = {"status": job["status"], "objetivo": job["objetivo"]}
+        if job["status"] == "done":
+            out["result"] = job["result"]
+        elif job["status"] == "error":
+            out["error"] = job["error"]
+        return out
