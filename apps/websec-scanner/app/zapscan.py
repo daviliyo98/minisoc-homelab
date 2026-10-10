@@ -45,20 +45,24 @@ class ZapError(RuntimeError):
 
 
 def _get(client: httpx.Client, base: str, path: str, api_key: str,
-         _reintentos: int = 2, **params) -> dict:
+         _reintentos: int = 2, _timeout: float | None = None, **params) -> dict:
     """Llama a la API JSON de ZAP y devuelve el objeto decodificado.
 
     Reintenta ante fallos de red/timeout transitorios (ZAP puede estar ocupado
     un instante), pero NO reintenta errores HTTP reales (un 400/500 no se
     arregla repitiendo): esos se propagan para que se vean en el diagnóstico.
+    `_timeout` permite dar más margen a llamadas pesadas (recogida de alertas).
     """
     if api_key:
         params["apikey"] = api_key
     url = f"{base}/JSON/{path}"
+    kwargs: dict = {"params": params}
+    if _timeout is not None:
+        kwargs["timeout"] = _timeout
     ultimo: Exception | None = None
     for intento in range(_reintentos + 1):
         try:
-            r = client.get(url, params=params)
+            r = client.get(url, **kwargs)
             r.raise_for_status()
             return r.json()
         except (httpx.TransportError, httpx.TimeoutException) as e:
@@ -221,14 +225,27 @@ def scan_zap(
                       log=emit, etiqueta="Activo")
                 modo = "zap-activo"
 
-            # 5) Recoger alertas del objetivo.
+            # 5) Recoger alertas del objetivo, POR PÁGINAS.
             #    Componente CORRECTO: 'alert' (singular). 'alerts' no existe en
-            #    la API de ZAP y devuelve "no_implementor". Sin start/count para
-            #    traerlas todas (filtradas por baseurl).
+            #    la API de ZAP y devuelve "no_implementor". Pedir todas de golpe
+            #    puede dar respuestas enormes y agotar el timeout (ReadTimeout):
+            #    paginamos de 100 en 100, con margen de tiempo amplio por página.
             fase = "recoger alertas"
             emit("Recogiendo alertas…")
-            data = _get(c, base, "alert/view/alerts/", api_key, baseurl=url)
-            alertas = data.get("alerts", []) or []
+            alertas = []
+            inicio_p, pagina, TOPE = 0, 100, 5000
+            while True:
+                data = _get(c, base, "alert/view/alerts/", api_key, _timeout=90.0,
+                            baseurl=url, start=str(inicio_p), count=str(pagina))
+                lote = data.get("alerts", []) or []
+                alertas.extend(lote)
+                emit(f"Alertas recogidas: {len(alertas)}")
+                if len(lote) < pagina:
+                    break
+                inicio_p += pagina
+                if inicio_p >= TOPE:
+                    emit(f"Tope de {TOPE} alertas alcanzado; corto la recogida.")
+                    break
             emit(f"{len(alertas)} alerta(s) en bruto recogida(s).")
 
     except httpx.HTTPStatusError as e:

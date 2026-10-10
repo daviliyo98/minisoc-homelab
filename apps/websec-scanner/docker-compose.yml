@@ -58,5 +58,9 @@ services:
       - "8080"                     # visible solo dentro de la red de Docker
     security_opt:
       - no-new-privileges:true
-    mem_limit: 1536m
+    # ZAP auto-dimensiona su heap a ~1/4 de la RAM del host (en la Pi de 8 GB,
+    # ~2 GB). El límite del contenedor debe quedar POR ENCIMA de ese heap o el
+    # kernel mata ZAP por OOM (se vio como ReadTimeout al recoger alertas en
+    # sitios reales con páginas grandes). Damos holgura: 2,5 GB.
+    mem_limit: 2560m
     restart: unless-stopped
