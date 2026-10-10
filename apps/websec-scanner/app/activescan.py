@@ -20,11 +20,14 @@ import json
 import shutil
 import subprocess
 
-# Nuclei -> severidad interna del scanner
+# Nuclei -> severidad interna del scanner.
+# 'info' NO es un fallo (es tecnología/huella detectada): va a su propio cubo
+# "informativo", que se muestra aparte y NO penaliza la puntuación.
 SEV_MAP = {
     "critical": "alta", "high": "alta",
     "medium": "media",
-    "low": "baja", "info": "baja", "unknown": "baja",
+    "low": "baja",
+    "info": "informativo", "unknown": "informativo",
 }
 
 TEMPLATES_DIR = "/opt/nuclei-templates"
@@ -44,9 +47,10 @@ def scan_activo(url: str, timeout_total: float = 200.0) -> dict:
         "-jsonl", "-silent",
         # Enfoque en VULNERABILIDADES reales (no las 6.600 plantillas): mucho más
         # rápido (segundos en vez de minutos) y son los hallazgos que van en un informe.
-        "-tags", "cve,misconfig,exposure,exposed-panels,default-login,sqli,xss,lfi,rce,ssrf,takeover",
-        # Severidad media o superior: fuera el ruido de low/info.
-        "-severity", "medium,high,critical",
+        "-tags", "cve,misconfig,exposure,exposed-panels,default-login,tech,ssl,sqli,xss,lfi,rce,ssrf,takeover",
+        # TODAS las severidades: los 'info'/'low' (cabeceras, cookies, tecnología
+        # detectada) son justo lo que el usuario quiere ver. Se clasifican después.
+        "-severity", "info,low,medium,high,critical",
         # Nada destructivo.
         "-exclude-tags", "dos,intrusive,fuzz",
         # Más paralelismo para terminar rápido, pero suave con el objetivo.
@@ -100,6 +104,6 @@ def scan_activo(url: str, timeout_total: float = 200.0) -> dict:
         tail = " | ".join(l.strip() for l in err_lines[-3:]) if err_lines else f"código de salida {proc.returncode}"
         return {"ok": False, "error": f"Nuclei no completó el escaneo: {tail}", "findings": []}
 
-    orden = {"alta": 0, "media": 1, "baja": 2}
+    orden = {"alta": 0, "media": 1, "baja": 2, "informativo": 3}
     findings.sort(key=lambda f: orden.get(f["severidad"], 9))
     return {"ok": True, "motor": "nuclei", "total": len(findings), "findings": findings}

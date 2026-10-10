@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 
-from . import activescan, checks, mailcheck
+from . import activescan, checks, mailcheck, zapscan
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
@@ -29,6 +29,10 @@ _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 API_KEY = os.environ.get("API_KEY", "")
 # El modo activo (Nuclei) está DESACTIVADO salvo que se active explícitamente.
 ACTIVE_ENABLED = os.environ.get("ACTIVE_SCAN_ENABLED", "") == "1"
+# Integración con OWASP ZAP (contenedor aparte). Desactivada salvo que se pida.
+ZAP_ENABLED = os.environ.get("ZAP_ENABLED", "") == "1"
+ZAP_API_KEY = os.environ.get("ZAP_API_KEY", "")
+ZAP_BASE = os.environ.get("ZAP_BASE", "http://zap:8080")
 
 app = FastAPI(
     title="MINISOC websec-scanner",
@@ -182,6 +186,11 @@ class ActiveScanRequest(ScanRequest):
     autorizo: bool = False
 
 
+class ZapScanRequest(ActiveScanRequest):
+    """Petición de escaneo con ZAP. `activo=True` añade el escaneo de inyección."""
+    activo: bool = False
+
+
 # --- Trabajos en segundo plano para el escaneo activo (es largo) ---
 # El escaneo con Nuclei tarda minutos: no cabe en una petición/respuesta. Se
 # lanza en un hilo, se devuelve un ticket, y el cliente consulta el estado.
@@ -190,31 +199,59 @@ _JOBS_LOCK = threading.Lock()
 _MAX_JOBS = 20
 
 
-def _run_active_job(job_id: str, url: str) -> None:
-    res = activescan.scan_activo(url, timeout_total=420.0)
+def _puntuar(todos: list[dict]) -> int:
+    pen = {"alta": 20, "media": 8, "baja": 3}
+    return max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
+
+
+def _finalizar_job(job_id: str, res: dict, *, modo: str, motor: str, url: str, aviso: str) -> None:
+    """Vuelca el resultado de un escaneo (Nuclei o ZAP) en el trabajo."""
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
         if job is None:
             return
         if not res.get("ok"):
             job["status"] = "error"
-            job["error"] = res.get("error", "No se pudo ejecutar el escaneo activo.")
+            job["error"] = res.get("error", "No se pudo ejecutar el escaneo.")
             return
         todos = res["findings"]
-        pen = {"alta": 20, "media": 8, "baja": 3}
-        nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
         job["status"] = "done"
         job["result"] = {
-            "objetivo": url, "modo": "activo", "motor": "nuclei", "puntuacion": nota,
+            "objetivo": url, "modo": modo, "motor": motor, "puntuacion": _puntuar(todos),
             "resumen": {
                 "altas": sum(1 for f in todos if f["severidad"] == "alta"),
                 "medias": sum(1 for f in todos if f["severidad"] == "media"),
                 "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
+                "informativos": sum(1 for f in todos if f["severidad"] == "informativo"),
             },
             "hallazgos": todos,
-            "aviso": "Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO "
-                     "con autorización explícita y por escrito del titular del sistema.",
+            "aviso": aviso,
         }
+
+
+def _run_active_job(job_id: str, url: str) -> None:
+    res = activescan.scan_activo(url, timeout_total=420.0)
+    _finalizar_job(
+        job_id, res, modo="activo", motor="nuclei", url=url,
+        aviso="Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO "
+              "con autorización explícita y por escrito del titular del sistema.",
+    )
+
+
+def _run_zap_job(job_id: str, url: str, activo: bool) -> None:
+    res = zapscan.scan_zap(
+        url, activo=activo, base=ZAP_BASE, api_key=ZAP_API_KEY,
+        timeout_total=(900.0 if activo else 360.0), es_publico=checks.es_publico,
+    )
+    modo = "zap-activo" if activo else "zap-pasivo"
+    if activo:
+        aviso = ("Escaneo ACTIVO con OWASP ZAP: inyecta cargas (SQLi, XSS, etc.) sobre los "
+                 "parámetros descubiertos. Es INTRUSIVO. Ejecútelo SOLO con autorización "
+                 "explícita y por escrito del titular del sistema.")
+    else:
+        aviso = ("Escaneo con OWASP ZAP (spider + análisis pasivo): rastrea el sitio y analiza "
+                 "las respuestas sin inyectar cargas. Escanee solo sistemas propios o autorizados.")
+    _finalizar_job(job_id, res, modo=modo, motor="zap", url=url, aviso=aviso)
 
 
 @app.post("/scan-active")
@@ -244,6 +281,42 @@ def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=N
                          "objetivo": req.url, "result": None, "error": None}
     threading.Thread(target=_run_active_job, args=(job_id, req.url), daemon=True).start()
     return {"job_id": job_id, "status": "running", "objetivo": req.url}
+
+
+@app.post("/scan-zap")
+def scan_zap(req: ZapScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
+    """Lanza un escaneo con OWASP ZAP en segundo plano y devuelve un ticket.
+
+    Candados:
+      • ZAP_ENABLED=1 en el servidor (y el contenedor 'zap' arrancado).
+      • autorizo=true en la petición.
+      • anti-SSRF: el objetivo debe resolver a una IP pública.
+      • activo=true (escaneo de inyección, INTRUSIVO) requiere ADEMÁS
+        ACTIVE_SCAN_ENABLED=1, igual que Nuclei.
+    El resultado se consulta luego en GET /scan-status/{job_id}.
+    """
+    _auth(x_api_key)
+    if not ZAP_ENABLED:
+        raise HTTPException(403, "La integración con ZAP está desactivada. Actívala con ZAP_ENABLED=1 y arranca el contenedor 'zap'.")
+    if not req.autorizo:
+        raise HTTPException(400, "El escaneo con ZAP requiere confirmar la autorización (autorizo=true).")
+    if req.activo and not ACTIVE_ENABLED:
+        raise HTTPException(403, "El escaneo ACTIVO de ZAP (inyección) requiere ACTIVE_SCAN_ENABLED=1 en el servidor.")
+
+    host = urlparse(req.url).hostname or ""
+    if not checks.es_publico(host):
+        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
+
+    job_id = uuid.uuid4().hex
+    with _JOBS_LOCK:
+        if len(_JOBS) >= _MAX_JOBS:
+            viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
+            _JOBS.pop(viejo, None)
+        _JOBS[job_id] = {"status": "running", "started": time.time(),
+                         "objetivo": req.url, "result": None, "error": None}
+    threading.Thread(target=_run_zap_job, args=(job_id, req.url, req.activo), daemon=True).start()
+    return {"job_id": job_id, "status": "running", "objetivo": req.url,
+            "modo": "zap-activo" if req.activo else "zap-pasivo"}
 
 
 @app.get("/scan-status/{job_id}")

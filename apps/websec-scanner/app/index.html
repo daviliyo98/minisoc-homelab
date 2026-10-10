@@ -42,6 +42,7 @@
   .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.72rem;
          font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#101520}
   .b-alta{background:var(--alta)} .b-media{background:var(--media)} .b-baja{background:var(--baja)}
+  .b-info{background:var(--muted)}
   .finding{display:flex;gap:12px;padding:13px 0;border-top:1px solid var(--border)}
   .finding:first-child{border-top:0}
   .finding .body{flex:1}
@@ -77,6 +78,7 @@
     <button class="tab active" data-tab="web">🌐 Web</button>
     <button class="tab" data-tab="mail">✉️ Correo</button>
     <button class="tab" data-tab="activo">⚡ Activo</button>
+    <button class="tab" data-tab="zap">🕷️ ZAP</button>
   </div>
 
   <div class="card">
@@ -100,6 +102,12 @@
         <span>Confirmo que tengo <b>autorización por escrito</b> del titular para escanear activamente este objetivo. El escaneo activo envía peticiones reales al servidor.</span>
       </label>
     </div>
+    <div id="zap-opts" class="hidden" style="margin-top:10px">
+      <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;color:var(--text);font-size:.85rem">
+        <input id="zap-activo" type="checkbox" style="width:auto;margin-top:3px">
+        <span>Escaneo <b>activo</b> de inyección (SQLi, XSS…). Más potente y más lento; <b>más intrusivo</b>. Sin marcar, ZAP solo rastrea y analiza en modo pasivo.</span>
+      </label>
+    </div>
     <button id="go">Analizar web</button>
   </div>
 
@@ -110,7 +118,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const sevClass = s => ({alta:"b-alta",media:"b-media",baja:"b-baja"}[s] || "b-baja");
+const sevClass = s => ({alta:"b-alta",media:"b-media",baja:"b-baja",informativo:"b-info"}[s] || "b-baja");
 const scoreColor = n => n>=80?"var(--ok)":n>=50?"var(--media)":"var(--alta)";
 let tab = "web";
 
@@ -122,11 +130,14 @@ document.querySelectorAll(".tab").forEach(b=>{
   b.addEventListener("click", ()=>{
     tab = b.dataset.tab;
     document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
-    const needsUrl = (tab==="web" || tab==="activo");
+    const needsUrl = (tab==="web" || tab==="activo" || tab==="zap");
+    const needsAuthz = (tab==="activo" || tab==="zap");
     $("#url-group").classList.toggle("hidden", !needsUrl);
     $("#domain-group").classList.toggle("hidden", tab!=="mail");
-    $("#authz-group").classList.toggle("hidden", tab!=="activo");
-    $("#go").textContent = tab==="mail" ? "Analizar correo" : (tab==="activo" ? "Escanear (activo)" : "Analizar web");
+    $("#authz-group").classList.toggle("hidden", !needsAuthz);
+    $("#zap-opts").classList.toggle("hidden", tab!=="zap");
+    $("#go").textContent = tab==="mail" ? "Analizar correo"
+      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web"));
     $("#result").classList.add("hidden");
   });
 });
@@ -148,7 +159,8 @@ function sumChecks(list){
 function scoreHead(d){
   return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
     '<div><div style="font-weight:600">'+d.objetivo+'</div>'+
-    '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas</div></div></div>';
+    '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas'+
+    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+'</div></div></div>';
 }
 
 // Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
@@ -181,17 +193,19 @@ async function run(){
   const box = $("#result");
   const target = (tab==="mail") ? $("#domain").value.trim() : $("#url").value.trim();
   if(!target) return;
-  if(tab==="activo" && !$("#authz").checked){ alert("Marca la casilla de autorización para el escaneo activo."); return; }
+  const esSegundoPlano = (tab==="activo" || tab==="zap");
+  if(esSegundoPlano && !$("#authz").checked){ alert("Marca la casilla de autorización para escanear este objetivo."); return; }
   try { localStorage.setItem("websec_key", key); } catch(e){}
 
-  $("#go").disabled = true; $("#go").textContent = tab==="activo" ? "Escaneando (puede tardar)…" : "Analizando…";
+  $("#go").disabled = true; $("#go").textContent = esSegundoPlano ? "Escaneando (puede tardar)…" : "Analizando…";
   box.classList.remove("hidden");
   box.innerHTML = '<span class="meta">Analizando ' + target + '…</span>';
 
   let endpoint, payload;
   if(tab==="web"){ endpoint="/scan"; payload={url: target}; }
   else if(tab==="mail"){ endpoint="/scan-mail"; payload={domain: target}; }
-  else { endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
+  else if(tab==="activo"){ endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
+  else { endpoint="/scan-zap"; payload={url: target, autorizo: $("#authz").checked, activo: $("#zap-activo").checked}; }
   try{
     const r = await fetch(endpoint, {
       method:"POST",
@@ -207,12 +221,13 @@ async function run(){
     }
     if(tab==="web") renderWeb(data);
     else if(tab==="mail") renderMail(data);
-    else { pollActive(data.job_id, key); return; }   // activo: trabajo en 2º plano
+    else { pollActive(data.job_id, key); return; }   // activo/zap: trabajo en 2º plano
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
     $("#go").disabled = false;
-    $("#go").textContent = tab==="mail" ? "Analizar correo" : (tab==="activo" ? "Escanear (activo)" : "Analizar web");
+    $("#go").textContent = tab==="mail" ? "Analizar correo"
+      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web"));
   }
 }
 
@@ -255,10 +270,33 @@ function renderMail(d){
 
 function renderActive(d){
   let h = scoreHead(d);
-  h += '<div class="verdict" style="border-color:var(--media);color:var(--media)">⚡ Escaneo ACTIVO con Nuclei — solo objetivos autorizados</div>';
-  if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos</div>'; }
-  h += sumFindings(d.hallazgos||[]);
-  if(!(d.hallazgos||[]).length){ h += '<p style="color:var(--ok)">Sin vulnerabilidades conocidas detectadas por Nuclei.</p>'; }
+  const esZap = d.motor === "zap";
+  const activoZap = d.modo === "zap-activo";
+  let etiqueta, vacio;
+  if(esZap && activoZap){
+    etiqueta = '🕷️ Escaneo ACTIVO con OWASP ZAP (inyección) — solo objetivos autorizados';
+    vacio = 'ZAP no detectó vulnerabilidades de inyección en los puntos analizados.';
+  } else if(esZap){
+    etiqueta = '🕷️ Escaneo con OWASP ZAP (spider + pasivo) — solo objetivos autorizados';
+    vacio = 'ZAP no detectó avisos en el análisis pasivo.';
+  } else {
+    etiqueta = '⚡ Escaneo ACTIVO con Nuclei — solo objetivos autorizados';
+    vacio = 'Sin vulnerabilidades conocidas detectadas por Nuclei.';
+  }
+  h += '<div class="verdict" style="border-color:var(--media);color:var(--media)">'+etiqueta+'</div>';
+
+  const todos = d.hallazgos || [];
+  const fallos = todos.filter(f => f.severidad !== "informativo");
+  const infos  = todos.filter(f => f.severidad === "informativo");
+
+  if(fallos.length){ h += '<div class="sectitle">Hallazgos</div>' + sumFindings(fallos); }
+  else { h += '<p style="color:var(--ok)">'+vacio+'</p>'; }
+
+  if(infos.length){
+    h += '<div class="sectitle">Informativo — tecnología detectada (no son fallos)</div>';
+    h += sumFindings(infos);
+  }
+  if(d.aviso){ h += '<p class="meta" style="margin-top:12px">'+d.aviso+'</p>'; }
   $("#result").innerHTML = h;
 }
 

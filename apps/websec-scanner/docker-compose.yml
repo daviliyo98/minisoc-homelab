@@ -1,4 +1,4 @@
-# websec-scanner: analizador pasivo de postura de seguridad web.
+# websec-scanner: analizador de postura de seguridad web.
 # Publicado solo en la LAN; requiere API_KEY (ver .env.example).
 services:
   websec-scanner:
@@ -10,6 +10,10 @@ services:
       API_KEY: "${API_KEY}"
       # Modo activo (Nuclei): 0 = desactivado (por defecto), 1 = activado.
       ACTIVE_SCAN_ENABLED: "${ACTIVE_SCAN_ENABLED:-0}"
+      # Integración con OWASP ZAP (spider + pasivo, y activo tras el triple candado).
+      ZAP_ENABLED: "${ZAP_ENABLED:-0}"
+      ZAP_API_KEY: "${ZAP_API_KEY:-}"
+      ZAP_BASE: "http://zap:8080"
     ports:
       - "192.168.1.20:8001:8000"   # accesible solo desde tu red, puerto 8001
     read_only: true                # sistema de archivos de solo lectura
@@ -26,4 +30,32 @@ services:
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
     mem_limit: 1536m               # holgura para Nuclei (6600+ plantillas); la Pi tiene 8 GB
+    restart: unless-stopped
+    depends_on:
+      - zap
+
+  # OWASP ZAP en modo demonio. NO se publica ningún puerto al host: solo es
+  # accesible desde la red interna de Docker (el scanner le habla por su nombre
+  # de servicio, http://zap:8080). Así ZAP no queda expuesto a la LAN ni a
+  # internet. El perfil 'zap' lo mantiene apagado salvo que lo pidas
+  # explícitamente (docker compose --profile zap up).
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    container_name: websec-zap
+    profiles: ["zap"]
+    # api.addrs.*: permite que el scanner (otra IP de la red Docker) use la API.
+    # api.key: clave obligatoria para toda llamada a la API (ver .env.example).
+    command: >
+      zap.sh -daemon -host 0.0.0.0 -port 8080
+      -config api.key=${ZAP_API_KEY:-}
+      -config api.addrs.addr.name=.*
+      -config api.addrs.addr.regex=true
+      -config database.recoverylog=false
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx1g"
+    expose:
+      - "8080"                     # visible solo dentro de la red de Docker
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1536m
     restart: unless-stopped
