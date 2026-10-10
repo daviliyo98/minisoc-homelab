@@ -44,13 +44,28 @@ class ZapError(RuntimeError):
     """Error controlado durante el escaneo con ZAP."""
 
 
-def _get(client: httpx.Client, base: str, path: str, api_key: str, **params) -> dict:
-    """Llama a la API JSON de ZAP y devuelve el objeto decodificado."""
+def _get(client: httpx.Client, base: str, path: str, api_key: str,
+         _reintentos: int = 2, **params) -> dict:
+    """Llama a la API JSON de ZAP y devuelve el objeto decodificado.
+
+    Reintenta ante fallos de red/timeout transitorios (ZAP puede estar ocupado
+    un instante), pero NO reintenta errores HTTP reales (un 400/500 no se
+    arregla repitiendo): esos se propagan para que se vean en el diagnóstico.
+    """
     if api_key:
         params["apikey"] = api_key
-    r = client.get(f"{base}/JSON/{path}", params=params)
-    r.raise_for_status()
-    return r.json()
+    url = f"{base}/JSON/{path}"
+    ultimo: Exception | None = None
+    for intento in range(_reintentos + 1):
+        try:
+            r = client.get(url, params=params)
+            r.raise_for_status()
+            return r.json()
+        except (httpx.TransportError, httpx.TimeoutException) as e:
+            ultimo = e
+            time.sleep(1.0 * (intento + 1))
+    assert ultimo is not None
+    raise ultimo
 
 
 def zap_disponible(base: str = ZAP_BASE_DEFAULT, api_key: str = "", timeout: float = 4.0) -> bool:
@@ -207,10 +222,12 @@ def scan_zap(
                 modo = "zap-activo"
 
             # 5) Recoger alertas del objetivo.
+            #    Componente CORRECTO: 'alert' (singular). 'alerts' no existe en
+            #    la API de ZAP y devuelve "no_implementor". Sin start/count para
+            #    traerlas todas (filtradas por baseurl).
             fase = "recoger alertas"
             emit("Recogiendo alertas…")
-            data = _get(c, base, "alerts/view/alerts/", api_key,
-                        baseurl=url, start="0", count="0")
+            data = _get(c, base, "alert/view/alerts/", api_key, baseurl=url)
             alertas = data.get("alerts", []) or []
             emit(f"{len(alertas)} alerta(s) en bruto recogida(s).")
 
