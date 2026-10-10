@@ -34,7 +34,7 @@ def nuclei_disponible() -> bool:
     return shutil.which("nuclei") is not None
 
 
-def scan_activo(url: str, timeout_total: float = 150.0) -> dict:
+def scan_activo(url: str, timeout_total: float = 200.0) -> dict:
     """Ejecuta Nuclei contra una URL autorizada y devuelve los hallazgos."""
     if not nuclei_disponible():
         return {"ok": False, "error": "Nuclei no está instalado en el contenedor.", "findings": []}
