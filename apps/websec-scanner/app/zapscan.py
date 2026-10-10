@@ -89,6 +89,44 @@ def _poll(
         time.sleep(intervalo)
 
 
+def _esperar_pasivo(
+    client: httpx.Client, base: str, api_key: str, deadline: float,
+    emit: Callable[[str], None], max_espera: float = 180.0,
+) -> None:
+    """Espera a que el analizador pasivo de ZAP drene su cola.
+
+    A diferencia del spider/ascan (que llegan a 100 y paran), la cola del
+    pasivo (`recordsToScan`) puede fluctuar y no bajar a 0 en equipos lentos
+    (p.ej. una Raspberry Pi con muchas páginas). Por eso NO fallamos si no
+    llega a 0: esperamos un máximo razonable y, si no, continuamos a recoger
+    las alertas (que ya son válidas). Confirmamos el fin con dos lecturas
+    seguidas a 0 (una sola podría ser un bajón puntual)."""
+    inicio = time.monotonic()
+    ceros = 0
+    while True:
+        ahora = time.monotonic()
+        if ahora > deadline:
+            emit("Pasivo: presupuesto global agotado; continúo con lo analizado.")
+            return
+        if ahora - inicio > max_espera:
+            emit(f"Pasivo: la cola no se vació en {int(max_espera)}s; continúo con lo analizado.")
+            return
+        data = _get(client, base, "pscan/view/recordsToScan/", api_key)
+        try:
+            pend = int(data.get("recordsToScan", "0"))
+        except (TypeError, ValueError):
+            pend = 0
+        emit(f"Pasivo (registros pendientes): {pend}")
+        if pend <= 0:
+            ceros += 1
+            if ceros >= 2:
+                emit("Pasivo completado.")
+                return
+        else:
+            ceros = 0
+        time.sleep(1.5)
+
+
 def scan_zap(
     url: str,
     *,
@@ -148,12 +186,11 @@ def scan_zap(
             _poll(c, base, "spider/view/status/", api_key, "status", "100",
                   deadline, scanId=spider_id, log=emit, etiqueta="Spider")
 
-            # 3) Esperar a que el escaneo pasivo procese todo lo rastreado.
+            # 3) Esperar a que el escaneo pasivo procese todo lo rastreado
+            #    (de forma tolerante: no fallamos si la cola no llega a 0).
             fase = "análisis pasivo"
             emit("Análisis pasivo de lo rastreado…")
-            _poll(c, base, "pscan/view/recordsToScan/", api_key,
-                  "recordsToScan", "0", deadline, intervalo=1.5,
-                  log=emit, etiqueta="Pasivo (registros pendientes)", unidad="")
+            _esperar_pasivo(c, base, api_key, deadline, emit)
 
             modo = "zap-pasivo"
             # 4) (Opcional) Escaneo activo: inyecta cargas sobre lo descubierto.
