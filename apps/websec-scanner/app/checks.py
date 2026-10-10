@@ -8,6 +8,7 @@ Es, en esencia, lo mismo que ve un navegador al abrir la página.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import socket
 import ssl
@@ -16,6 +17,37 @@ from urllib.parse import urlparse
 
 import dns.resolver
 import httpx
+
+
+class SsrfBloqueado(ValueError):
+    """El objetivo resuelve a una IP interna/reservada: posible SSRF, se rechaza."""
+
+
+def es_publico(host: str) -> bool:
+    """True solo si TODAS las IPs a las que resuelve el host son públicas.
+
+    Protección anti-SSRF: en vez de mirar el texto del host (que se puede eludir
+    con DNS a una IP interna, codificaciones raras o IPv6), resolvemos el host y
+    comprobamos cada IP. Bloquea 10.x/192.168.x, 127.x, 169.254.169.254 (metadata
+    cloud), ::1, direcciones reservadas, multicast, etc.
+    """
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for *_, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
 
 # Forzar IPv4: la red interna de Docker (docker0) es solo IPv4. Si el host tiene
 # conectividad IPv6 (p. ej. por el Router Advertisement del router ISP, ver HL-001),
@@ -46,13 +78,31 @@ def _normalize(url: str) -> str:
 
 
 async def check_http(url: str, timeout: float) -> dict:
-    """Analiza las cabeceras HTTP de respuesta. Solo hace una petición GET."""
+    """Analiza las cabeceras HTTP de respuesta.
+
+    Sigue las redirecciones manualmente y valida que CADA salto apunta a una IP
+    pública (anti-SSRF): una web pública podría redirigir a http://169.254.169.254/
+    o a una IP interna, y no queremos que el scanner la siga.
+    """
     url = _normalize(url)
     findings: list[dict] = []
+    cur = url
+    r = None
     async with httpx.AsyncClient(
-        timeout=timeout, follow_redirects=True, verify=True, transport=_ipv4_transport()
+        timeout=timeout, follow_redirects=False, verify=True, transport=_ipv4_transport()
     ) as client:
-        r = await client.get(url, headers={"User-Agent": "MINISOC-websec-scanner/1.0"})
+        for _ in range(6):
+            host = urlparse(cur).hostname or ""
+            if not es_publico(host):
+                raise SsrfBloqueado(f"Objetivo no permitido (interno o reservado): {host}")
+            r = await client.get(cur, headers={"User-Agent": "MINISOC-websec-scanner/1.0"})
+            loc = r.headers.get("location")
+            if r.is_redirect and loc:
+                cur = str(httpx.URL(cur).join(loc))
+                continue
+            break
+    if r is None:
+        raise SsrfBloqueado("No se pudo completar la petición.")
 
     headers = {k.lower(): v for k, v in r.headers.items()}
 
@@ -247,7 +297,9 @@ async def check_security_txt(url: str, timeout: float) -> dict:
     """
     url = _normalize(url)
     base = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, transport=_ipv4_transport()) as client:
+    # Sin seguir redirecciones: evitamos que un redirect lleve la petición a un
+    # destino interno (anti-SSRF). Solo nos interesa el security.txt del propio host.
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, transport=_ipv4_transport()) as client:
         for path in ("/.well-known/security.txt", "/security.txt"):
             try:
                 r = await client.get(base + path)

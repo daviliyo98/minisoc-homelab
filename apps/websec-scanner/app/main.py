@@ -97,8 +97,14 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
     timeout = 10.0
     host = urlparse(req.url if urlparse(req.url).scheme else "https://" + req.url).hostname
 
+    # Anti-SSRF: el host debe resolver SOLO a IPs públicas.
+    if not checks.es_publico(host or ""):
+        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
+
     try:
         http_res = await checks.check_http(req.url, timeout)
+    except checks.SsrfBloqueado as e:
+        raise HTTPException(400, str(e))
     except httpx.ConnectError:
         raise HTTPException(502, "No se pudo conectar con el objetivo: el puerto puede estar cerrado o el host no acepta HTTPS.")
     except httpx.TimeoutException:
@@ -189,6 +195,12 @@ def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=N
         raise HTTPException(403, "El modo activo está desactivado. Actívalo con ACTIVE_SCAN_ENABLED=1 en el servidor.")
     if not req.autorizo:
         raise HTTPException(400, "El escaneo activo requiere confirmar la autorización (autorizo=true).")
+
+    # Anti-SSRF: el host debe resolver SOLO a IPs públicas (defensa en profundidad,
+    # además del validador de ScanRequest).
+    host = urlparse(req.url).hostname or ""
+    if not checks.es_publico(host):
+        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
 
     res = activescan.scan_activo(req.url)
     if not res.get("ok"):
