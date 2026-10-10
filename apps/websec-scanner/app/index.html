@@ -80,6 +80,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="web">🌐 Web</button>
     <button class="tab" data-tab="mail">✉️ Correo</button>
+    <button class="tab" data-tab="dns">🧭 DNS</button>
     <button class="tab" data-tab="activo">⚡ Activo</button>
     <button class="tab" data-tab="zap">🕷️ ZAP</button>
   </div>
@@ -134,13 +135,15 @@ document.querySelectorAll(".tab").forEach(b=>{
     tab = b.dataset.tab;
     document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
     const needsUrl = (tab==="web" || tab==="activo" || tab==="zap");
+    const needsDomain = (tab==="mail" || tab==="dns");
     const needsAuthz = (tab==="activo" || tab==="zap");
     $("#url-group").classList.toggle("hidden", !needsUrl);
-    $("#domain-group").classList.toggle("hidden", tab!=="mail");
+    $("#domain-group").classList.toggle("hidden", !needsDomain);
     $("#authz-group").classList.toggle("hidden", !needsAuthz);
     $("#zap-opts").classList.toggle("hidden", tab!=="zap");
     $("#go").textContent = tab==="mail" ? "Analizar correo"
-      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web"));
+      : (tab==="dns" ? "Analizar DNS"
+      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web")));
     $("#result").classList.add("hidden");
   });
 });
@@ -204,7 +207,7 @@ async function pollActive(jobId, key){
 async function run(){
   const key = $("#key").value.trim();
   const box = $("#result");
-  const target = (tab==="mail") ? $("#domain").value.trim() : $("#url").value.trim();
+  const target = (tab==="mail"||tab==="dns") ? $("#domain").value.trim() : $("#url").value.trim();
   if(!target) return;
   const esSegundoPlano = (tab==="activo" || tab==="zap");
   if(esSegundoPlano && !$("#authz").checked){ alert("Marca la casilla de autorización para escanear este objetivo."); return; }
@@ -217,6 +220,7 @@ async function run(){
   let endpoint, payload;
   if(tab==="web"){ endpoint="/scan"; payload={url: target}; }
   else if(tab==="mail"){ endpoint="/scan-mail"; payload={domain: target}; }
+  else if(tab==="dns"){ endpoint="/scan-dns"; payload={domain: target}; }
   else if(tab==="activo"){ endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
   else { endpoint="/scan-zap"; payload={url: target, autorizo: $("#authz").checked, activo: $("#zap-activo").checked}; }
   try{
@@ -234,13 +238,15 @@ async function run(){
     }
     if(tab==="web") renderWeb(data);
     else if(tab==="mail") renderMail(data);
+    else if(tab==="dns") renderDns(data);
     else { pollActive(data.job_id, key); return; }   // activo/zap: trabajo en 2º plano
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
     $("#go").disabled = false;
     $("#go").textContent = tab==="mail" ? "Analizar correo"
-      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web"));
+      : (tab==="dns" ? "Analizar DNS"
+      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web")));
   }
 }
 
@@ -310,6 +316,26 @@ function renderActive(d){
     h += sumFindings(infos);
   }
   if(d.aviso){ h += '<p class="meta" style="margin-top:12px">'+d.aviso+'</p>'; }
+  $("#result").innerHTML = h;
+}
+
+function renderDns(d){
+  let h = scoreHead({objetivo:d.dominio, puntuacion:d.puntuacion, resumen:d.resumen});
+  const R = d.registros || {};
+  const filas = [];
+  const push = (k, arr) => { (arr||[]).forEach(v => filas.push([k, v])); };
+  push("A", R.A); push("AAAA", R.AAAA); push("MX", R.MX); push("NS", R.NS);
+  push("SOA", R.SOA); push("TXT", R.TXT); push("CAA", R.CAA);
+  if(filas.length){
+    h += '<div class="sectitle">Registros DNS</div><div class="checks">';
+    h += filas.map(([k,v]) => '<div class="chk"><span class="nm" style="min-width:52px">'+esc(k)+'</span>'+
+         '<span class="dt" style="flex:1">'+esc(v)+'</span></div>').join("");
+    h += '</div>';
+  }
+  if((d.hallazgos||[]).length){ h += '<div class="sectitle">Hallazgos</div>' + sumFindings(d.hallazgos); }
+  else { h += '<p style="color:var(--ok)">Sin hallazgos de infraestructura DNS.</p>'; }
+  h += sumChecks(d.comprobaciones);
+  if(d.aviso){ h += '<p class="meta" style="margin-top:12px">'+esc(d.aviso)+'</p>'; }
   $("#result").innerHTML = h;
 }
 

@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 
-from . import activescan, checks, mailcheck, zapscan
+from . import activescan, checks, dnsrecon, mailcheck, zapscan
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
@@ -80,6 +80,25 @@ def health() -> dict:
 
 class MailScanRequest(BaseModel):
     domain: str
+
+
+class DnsScanRequest(BaseModel):
+    domain: str
+
+
+@app.post("/scan-dns")
+def scan_dns(req: DnsScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
+    """Reconocimiento DNS pasivo de un dominio (A/AAAA/MX/NS/SOA/TXT/CAA).
+
+    Analiza la postura de infraestructura (redundancia de NS, colocación de
+    correo y web, CAA, DNSSEC). Síncrono: dns.resolver es bloqueante y FastAPI
+    lo ejecuta en un hilo.
+    """
+    _auth(x_api_key)
+    res = dnsrecon.scan(req.domain)
+    if res.get("error"):
+        raise HTTPException(400, res["error"])
+    return res
 
 
 @app.post("/scan-mail")
