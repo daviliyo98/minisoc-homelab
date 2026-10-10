@@ -52,7 +52,7 @@ def scan_activo(url: str, timeout_total: float = 200.0) -> dict:
         # Más paralelismo para terminar rápido, pero suave con el objetivo.
         "-concurrency", "50", "-bulk-size", "50", "-rate-limit", "50",
         "-timeout", "8", "-retries", "1",
-        "-disable-update-check", "-no-interactsh", "-stats=false",
+        "-disable-update-check", "-no-interactsh", "-stats=false", "-nc",
     ]
     # El contenedor es de solo lectura: Nuclei escribe su config/caché en /tmp (tmpfs).
     env = {"HOME": "/tmp", "PATH": "/usr/local/bin:/usr/bin:/bin"}
