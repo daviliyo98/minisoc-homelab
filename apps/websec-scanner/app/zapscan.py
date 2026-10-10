@@ -91,7 +91,6 @@ def _poll(
     """Hace polling de un endpoint de estado hasta que el campo llegue a 100
     (spider/ascan) o a 0 (recordsToScan del pasivo), o se agote el tiempo.
     Si se pasa `log`, informa del progreso en cada vuelta."""
-    ultimo = None
     while True:
         if time.monotonic() > deadline:
             raise ZapError(f"ZAP superó el tiempo límite durante: {etiqueta or path}.")
@@ -100,9 +99,9 @@ def _poll(
             valor = int(data.get(campo, "0"))
         except (TypeError, ValueError):
             valor = 0
-        if log and etiqueta and valor != ultimo:
+        # El regulado (una línea/min) lo decide el callback que nos pasan.
+        if log and etiqueta:
             log(f"{etiqueta}: {valor}{unidad}")
-            ultimo = valor
         if (objetivo == "100" and valor >= 100) or (objetivo == "0" and valor <= 0):
             return
         time.sleep(intervalo)
@@ -110,7 +109,8 @@ def _poll(
 
 def _esperar_pasivo(
     client: httpx.Client, base: str, api_key: str, deadline: float,
-    emit: Callable[[str], None], max_espera: float = 180.0,
+    emit: Callable[[str], None], prog: Callable[[str], None] | None = None,
+    max_espera: float = 180.0,
 ) -> None:
     """Espera a que el analizador pasivo de ZAP drene su cola.
 
@@ -135,7 +135,7 @@ def _esperar_pasivo(
             pend = int(data.get("recordsToScan", "0"))
         except (TypeError, ValueError):
             pend = 0
-        emit(f"Pasivo (registros pendientes): {pend}")
+        (prog or emit)(f"Pasivo (registros pendientes): {pend}")
         if pend <= 0:
             ceros += 1
             if ceros >= 2:
@@ -163,11 +163,22 @@ def scan_zap(
     Si se pasa `log`, informa del progreso de cada fase en directo.
     """
     def emit(msg: str) -> None:
+        """Hito: se registra siempre (cambios de fase)."""
         if log:
             try:
                 log(msg)
             except Exception:
                 pass
+
+    # Progreso regulado: una línea como mucho cada ~55 s, para un pulso de ~1/min
+    # en vez de un flujo nervioso cada 2-3 s. Más legible y profesional.
+    _ult_prog = [0.0]
+
+    def prog(msg: str) -> None:
+        ahora = time.monotonic()
+        if ahora - _ult_prog[0] >= 55:
+            _ult_prog[0] = ahora
+            emit(msg)
 
     host = urlparse(url).hostname or ""
 
@@ -203,13 +214,14 @@ def scan_zap(
             spider_id = str(r.get("scan", "0"))
             fase = "spider en curso"
             _poll(c, base, "spider/view/status/", api_key, "status", "100",
-                  deadline, scanId=spider_id, log=emit, etiqueta="Spider")
+                  deadline, scanId=spider_id, log=prog, etiqueta="Spider")
+            emit("Spider: 100% (rastreo completado).")
 
             # 3) Esperar a que el escaneo pasivo procese todo lo rastreado
             #    (de forma tolerante: no fallamos si la cola no llega a 0).
             fase = "análisis pasivo"
             emit("Análisis pasivo de lo rastreado…")
-            _esperar_pasivo(c, base, api_key, deadline, emit)
+            _esperar_pasivo(c, base, api_key, deadline, emit, prog=prog)
 
             modo = "zap-pasivo"
             # 4) (Opcional) Escaneo activo: inyecta cargas sobre lo descubierto.
@@ -222,7 +234,8 @@ def scan_zap(
                 fase = "escaneo activo en curso"
                 _poll(c, base, "ascan/view/status/", api_key, "status", "100",
                       deadline, scanId=ascan_id, intervalo=3.0,
-                      log=emit, etiqueta="Activo")
+                      log=prog, etiqueta="Activo")
+                emit("Activo: 100% (completado).")
                 modo = "zap-activo"
 
             # 5) Recoger alertas del objetivo, POR PÁGINAS.
