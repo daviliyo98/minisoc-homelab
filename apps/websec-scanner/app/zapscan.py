@@ -207,10 +207,23 @@ def scan_zap(
             _get(c, base, "core/action/accessUrl/", api_key, url=url, followRedirects="false")
 
             # 2) Spider: rastrea el sitio (en el ámbito del host de partida).
+            #    ACOTADO: un e-commerce tiene miles de páginas (catálogo). Un
+            #    escaneo de seguridad solo necesita una muestra representativa
+            #    (login, registro, buscador, checkout, panel…), no cada ficha de
+            #    producto. Limitamos duración y profundidad para no perdernos en
+            #    el catálogo (más rápido y menos ruidoso ante el fail2ban).
+            fase = "configurar el spider"
+            try:
+                _get(c, base, "spider/action/setOptionMaxDuration/", api_key, Integer="4")   # 4 min máx
+                _get(c, base, "spider/action/setOptionMaxDepth/", api_key, Integer="6")       # 6 niveles
+                _get(c, base, "spider/action/setOptionMaxChildren/", api_key, Integer="30")   # 30 hijos/nodo
+            except httpx.HTTPError:
+                pass  # si la versión no soporta alguna opción, seguimos igual
+
             fase = "lanzar el spider"
-            emit("Spider: rastreando el sitio…")
+            emit("Spider: rastreando el sitio (máx. 4 min, muestra representativa)…")
             r = _get(c, base, "spider/action/scan/", api_key,
-                     url=url, recurse="true", subtreeOnly="true", maxChildren="50")
+                     url=url, recurse="true", subtreeOnly="true", maxChildren="30")
             spider_id = str(r.get("scan", "0"))
             fase = "spider en curso"
             _poll(c, base, "spider/view/status/", api_key, "status", "100",
