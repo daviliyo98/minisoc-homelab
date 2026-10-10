@@ -31,8 +31,9 @@ services:
       - net.ipv6.conf.default.disable_ipv6=1
     mem_limit: 1536m               # holgura para Nuclei (6600+ plantillas); la Pi tiene 8 GB
     restart: unless-stopped
-    depends_on:
-      - zap
+    # OJO: NO ponemos depends_on: zap. ZAP está en un profile opcional y el
+    # scanner lo detecta en caliente (zap_disponible). Un depends_on a un
+    # servicio desactivado por profile rompe el compose ("undefined service").
 
   # OWASP ZAP en modo demonio. NO se publica ningún puerto al host: solo es
   # accesible desde la red interna de Docker (el scanner le habla por su nombre
