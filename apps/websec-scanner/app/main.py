@@ -45,12 +45,11 @@ class ScanRequest(BaseModel):
         p = urlparse(v)
         if p.scheme not in ("http", "https"):
             raise ValueError("Solo se admiten URLs http/https.")
-        host = p.hostname or ""
-        # No permitir escanear la red interna ni localhost desde la API
-        if host in ("localhost", "127.0.0.1", "0.0.0.0") or host.startswith(
-            ("10.", "192.168.", "172.16.", "172.17.", "169.254.")
-        ):
-            raise ValueError("No se permiten objetivos internos o de loopback.")
+        if not p.hostname:
+            raise ValueError("URL sin host válido.")
+        # El bloqueo de objetivos internos/reservados (anti-SSRF) se hace en el
+        # endpoint con checks.es_publico(), que da un mensaje claro (400) en vez
+        # del error de validación 422.
         return v
 
 

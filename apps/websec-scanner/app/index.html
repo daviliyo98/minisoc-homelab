@@ -174,7 +174,12 @@ async function run(){
       body: JSON.stringify(payload)
     });
     const data = await r.json();
-    if(!r.ok){ box.innerHTML = '<p class="err">Error '+r.status+': '+(data.detail||"fallo")+'</p>'; return; }
+    if(!r.ok){
+      let det = data && data.detail;
+      if(Array.isArray(det)) det = det.map(e=>e.msg||JSON.stringify(e)).join("; ");
+      else if(det && typeof det !== "string") det = JSON.stringify(det);
+      box.innerHTML = '<p class="err">Error '+r.status+': '+(det||"fallo")+'</p>'; return;
+    }
     if(tab==="web") renderWeb(data); else if(tab==="mail") renderMail(data); else renderActive(data);
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
