@@ -43,6 +43,9 @@
          font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#101520}
   .b-alta{background:var(--alta)} .b-media{background:var(--media)} .b-baja{background:var(--baja)}
   .b-info{background:var(--muted)}
+  .logbox{margin-top:10px;background:#0a0e17;border:1px solid var(--border);border-radius:8px;
+    padding:9px 11px;max-height:230px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .logline{color:var(--muted);font-size:.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-all}
   .finding{display:flex;gap:12px;padding:13px 0;border-top:1px solid var(--border)}
   .finding:first-child{border-top:0}
   .finding .body{flex:1}
@@ -164,6 +167,13 @@ function scoreHead(d){
 }
 
 // Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function logBox(log){
+  if(!log || !log.length) return "";
+  const lineas = log.slice(-14).map(l=>'<div class="logline">'+esc(l)+'</div>').join("");
+  return '<div class="logbox">'+lineas+'</div>';
+}
+
 async function pollActive(jobId, key){
   const box = $("#result");
   if(!jobId){ box.innerHTML='<p class="err">No se recibió el identificador del escaneo.</p>'; return; }
@@ -171,7 +181,7 @@ async function pollActive(jobId, key){
   while(true){
     await new Promise(r=>setTimeout(r, 3000));
     secs += 3;
-    if(secs > 480){ box.innerHTML='<p class="err">El escaneo tardó demasiado (más de 8 min).</p>'; return; }
+    if(secs > 900){ box.innerHTML='<p class="err">El escaneo tardó demasiado (más de 15 min).</p>'; return; }
     let r, data;
     try{
       r = await fetch("/scan-status/"+jobId, {headers:{"x-api-key":key}});
@@ -179,12 +189,15 @@ async function pollActive(jobId, key){
     }catch(e){ box.innerHTML='<p class="err">Se perdió la conexión con la API.</p>'; return; }
     if(!r.ok){ box.innerHTML='<p class="err">Error '+r.status+': '+((data&&data.detail)||"fallo")+'</p>'; return; }
     if(data.status==="running"){
-      box.innerHTML='<span class="meta">⚡ Escaneando '+(data.objetivo||"")+'… ('+secs+'s) — puede tardar unos minutos</span>';
+      box.innerHTML='<span class="meta">🕷️ Escaneando '+esc(data.objetivo||"")+'… ('+secs+'s)</span>'+logBox(data.log);
       continue;
     }
-    if(data.status==="error"){ box.innerHTML='<p class="err">El escaneo falló: '+(data.error||"error")+'</p>'; return; }
+    if(data.status==="error"){
+      box.innerHTML='<p class="err">El escaneo falló: '+esc(data.error||"error")+'</p>'+logBox(data.log);
+      return;
+    }
     if(data.status==="done"){ renderActive(data.result); return; }
-    box.innerHTML='<p class="err">Estado desconocido: '+data.status+'</p>'; return;
+    box.innerHTML='<p class="err">Estado desconocido: '+esc(data.status)+'</p>'; return;
   }
 }
 

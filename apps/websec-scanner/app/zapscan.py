@@ -65,18 +65,25 @@ def zap_disponible(base: str = ZAP_BASE_DEFAULT, api_key: str = "", timeout: flo
 
 def _poll(
     client: httpx.Client, base: str, path: str, api_key: str, campo: str,
-    objetivo: str, deadline: float, intervalo: float = 2.0, **params,
+    objetivo: str, deadline: float, intervalo: float = 2.0,
+    log: Callable[[str], None] | None = None, etiqueta: str = "", unidad: str = "%",
+    **params,
 ) -> None:
     """Hace polling de un endpoint de estado hasta que el campo llegue a 100
-    (spider/ascan) o a 0 (recordsToScan del pasivo), o se agote el tiempo."""
+    (spider/ascan) o a 0 (recordsToScan del pasivo), o se agote el tiempo.
+    Si se pasa `log`, informa del progreso en cada vuelta."""
+    ultimo = None
     while True:
         if time.monotonic() > deadline:
-            raise ZapError("ZAP superó el tiempo límite durante el escaneo.")
+            raise ZapError(f"ZAP superó el tiempo límite durante: {etiqueta or path}.")
         data = _get(client, base, path, api_key, **params)
         try:
             valor = int(data.get(campo, "0"))
         except (TypeError, ValueError):
             valor = 0
+        if log and etiqueta and valor != ultimo:
+            log(f"{etiqueta}: {valor}{unidad}")
+            ultimo = valor
         if (objetivo == "100" and valor >= 100) or (objetivo == "0" and valor <= 0):
             return
         time.sleep(intervalo)
@@ -90,12 +97,21 @@ def scan_zap(
     api_key: str = "",
     timeout_total: float = 600.0,
     es_publico: Callable[[str], bool] | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> dict:
     """Escanea una URL autorizada con ZAP y devuelve los hallazgos.
 
     activo=False -> spider + pasivo (ligero).
     activo=True  -> además, escaneo activo (inyección). INTRUSIVO.
+    Si se pasa `log`, informa del progreso de cada fase en directo.
     """
+    def emit(msg: str) -> None:
+        if log:
+            try:
+                log(msg)
+            except Exception:
+                pass
+
     host = urlparse(url).hostname or ""
 
     # Anti-SSRF: revalidamos aquí también (defensa en profundidad). ZAP vive en
@@ -107,48 +123,76 @@ def scan_zap(
 
     deadline = time.monotonic() + timeout_total
 
+    fase = "comprobar ZAP"
     try:
         with httpx.Client(timeout=30.0) as c:
+            emit("Comprobando que ZAP responde…")
             if not zap_disponible(base, api_key):
                 return {"ok": False,
                         "error": "El servicio ZAP no está disponible. ¿Está arrancado el contenedor 'zap'?",
                         "findings": []}
+            emit("ZAP accesible. Iniciando escaneo.")
 
             # 1) Sembrar el sitio en el árbol de ZAP.
+            fase = "acceder a la URL (accessUrl)"
+            emit(f"Accediendo a {url}")
             _get(c, base, "core/action/accessUrl/", api_key, url=url, followRedirects="false")
 
             # 2) Spider: rastrea el sitio (en el ámbito del host de partida).
+            fase = "lanzar el spider"
+            emit("Spider: rastreando el sitio…")
             r = _get(c, base, "spider/action/scan/", api_key,
                      url=url, recurse="true", subtreeOnly="true", maxChildren="50")
             spider_id = str(r.get("scan", "0"))
+            fase = "spider en curso"
             _poll(c, base, "spider/view/status/", api_key, "status", "100",
-                  deadline, scanId=spider_id)
+                  deadline, scanId=spider_id, log=emit, etiqueta="Spider")
 
             # 3) Esperar a que el escaneo pasivo procese todo lo rastreado.
+            fase = "análisis pasivo"
+            emit("Análisis pasivo de lo rastreado…")
             _poll(c, base, "pscan/view/recordsToScan/", api_key,
-                  "recordsToScan", "0", deadline, intervalo=1.5)
+                  "recordsToScan", "0", deadline, intervalo=1.5,
+                  log=emit, etiqueta="Pasivo (registros pendientes)", unidad="")
 
             modo = "zap-pasivo"
             # 4) (Opcional) Escaneo activo: inyecta cargas sobre lo descubierto.
             if activo:
+                fase = "lanzar el escaneo activo"
+                emit("Escaneo ACTIVO (inyección): enviando cargas…")
                 r = _get(c, base, "ascan/action/scan/", api_key,
                          url=url, recurse="true", inScopeOnly="false")
                 ascan_id = str(r.get("scan", "0"))
+                fase = "escaneo activo en curso"
                 _poll(c, base, "ascan/view/status/", api_key, "status", "100",
-                      deadline, scanId=ascan_id, intervalo=3.0)
+                      deadline, scanId=ascan_id, intervalo=3.0,
+                      log=emit, etiqueta="Activo")
                 modo = "zap-activo"
 
             # 5) Recoger alertas del objetivo.
+            fase = "recoger alertas"
+            emit("Recogiendo alertas…")
             data = _get(c, base, "alerts/view/alerts/", api_key,
                         baseurl=url, start="0", count="0")
             alertas = data.get("alerts", []) or []
+            emit(f"{len(alertas)} alerta(s) en bruto recogida(s).")
 
+    except httpx.HTTPStatusError as e:
+        cuerpo = ""
+        try:
+            cuerpo = (e.response.text or "").strip().replace("\n", " ")[:300]
+        except Exception:
+            pass
+        code = e.response.status_code if e.response is not None else "?"
+        return {"ok": False,
+                "error": f"ZAP devolvió HTTP {code} al {fase}. {cuerpo}".strip(),
+                "findings": []}
     except httpx.HTTPError as e:
-        return {"ok": False, "error": f"Error de comunicación con ZAP: {type(e).__name__}", "findings": []}
+        return {"ok": False, "error": f"Error de comunicación con ZAP al {fase}: {type(e).__name__}", "findings": []}
     except ZapError as e:
         return {"ok": False, "error": str(e), "findings": []}
     except Exception as e:  # pragma: no cover
-        return {"ok": False, "error": f"No se pudo completar el escaneo ZAP: {e}", "findings": []}
+        return {"ok": False, "error": f"No se pudo completar el escaneo ZAP al {fase}: {e}", "findings": []}
 
     findings = _agrupar_alertas(alertas)
     orden = {"alta": 0, "media": 1, "baja": 2, "informativo": 3}

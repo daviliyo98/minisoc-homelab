@@ -238,10 +238,24 @@ def _run_active_job(job_id: str, url: str) -> None:
     )
 
 
+def _log_job(job_id: str, msg: str) -> None:
+    """Añade una línea con hora al log del trabajo (acotado a 80 líneas)."""
+    linea = time.strftime("%H:%M:%S") + "  " + msg
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        log = job.setdefault("log", [])
+        log.append(linea)
+        if len(log) > 80:
+            del log[:-80]
+
+
 def _run_zap_job(job_id: str, url: str, activo: bool) -> None:
     res = zapscan.scan_zap(
         url, activo=activo, base=ZAP_BASE, api_key=ZAP_API_KEY,
         timeout_total=(900.0 if activo else 360.0), es_publico=checks.es_publico,
+        log=lambda m: _log_job(job_id, m),
     )
     modo = "zap-activo" if activo else "zap-pasivo"
     if activo:
@@ -278,7 +292,7 @@ def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=N
             viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
             _JOBS.pop(viejo, None)
         _JOBS[job_id] = {"status": "running", "started": time.time(),
-                         "objetivo": req.url, "result": None, "error": None}
+                         "objetivo": req.url, "result": None, "error": None, "log": []}
     threading.Thread(target=_run_active_job, args=(job_id, req.url), daemon=True).start()
     return {"job_id": job_id, "status": "running", "objetivo": req.url}
 
@@ -313,7 +327,7 @@ def scan_zap(req: ZapScanRequest, x_api_key: str | None = Header(default=None)) 
             viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
             _JOBS.pop(viejo, None)
         _JOBS[job_id] = {"status": "running", "started": time.time(),
-                         "objetivo": req.url, "result": None, "error": None}
+                         "objetivo": req.url, "result": None, "error": None, "log": []}
     threading.Thread(target=_run_zap_job, args=(job_id, req.url, req.activo), daemon=True).start()
     return {"job_id": job_id, "status": "running", "objetivo": req.url,
             "modo": "zap-activo" if req.activo else "zap-pasivo"}
@@ -328,6 +342,8 @@ def scan_status(job_id: str, x_api_key: str | None = Header(default=None)) -> di
         if job is None:
             raise HTTPException(404, "Trabajo no encontrado o caducado.")
         out: dict = {"status": job["status"], "objetivo": job["objetivo"]}
+        if job.get("log"):
+            out["log"] = list(job["log"])
         if job["status"] == "done":
             out["result"] = job["result"]
         elif job["status"] == "error":
