@@ -1,0 +1,4 @@
+[submodule "apps/websec-scanner/testssl.sh"]
+	path = apps/websec-scanner/testssl.sh
+	url = https://github.com/testssl/testssl.sh
+	branch = 3.3dev

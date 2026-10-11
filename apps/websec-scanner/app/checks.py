@@ -136,18 +136,36 @@ async def check_http(url: str, timeout: float) -> dict:
                 "remediacion": f"Ocultar o minimizar el valor de '{h}'.",
             })
 
-    # Cookies sin flags de seguridad
+    # Cookies sin flags de seguridad. Se analizan los ATRIBUTOS (tras el primer
+    # ';'), no la cadena entera: una cookie llamada 'insecure_id' o cuyo valor
+    # contenga "secure" no debe contar como si tuviera el flag.
     for cookie in r.headers.get_list("set-cookie"):
-        low = cookie.lower()
-        faltan = [f for f in ("secure", "httponly", "samesite") if f not in low]
+        attrs = {p.strip().split("=", 1)[0].lower() for p in cookie.split(";")[1:] if p.strip()}
+        faltan = [f for f in ("secure", "httponly", "samesite") if f not in attrs]
         if faltan:
-            nombre = cookie.split("=", 1)[0]
+            nombre = cookie.split("=", 1)[0].strip()
             findings.append({
                 "severidad": "media",
                 "titulo": f"Cookie '{nombre}' sin flags {', '.join(faltan)}",
                 "detalle": "Una cookie sin Secure/HttpOnly/SameSite es más fácil de robar o de usar en ataques CSRF.",
                 "remediacion": "Añadir los atributos Secure, HttpOnly y SameSite.",
             })
+
+    # CORS: comodín junto con credenciales (los navegadores lo rechazan, pero
+    # delata una configuración que suele reflejar el Origin en otras rutas).
+    acao = headers.get("access-control-allow-origin", "").strip()
+    if acao == "*" and headers.get("access-control-allow-credentials", "").lower() == "true":
+        findings.append({
+            "id": "cors-wildcard-credentials",
+            "severidad": "media",
+            "titulo": "CORS permisivo con credenciales",
+            "detalle": "Access-Control-Allow-Origin: * junto con Access-Control-Allow-Credentials: true.",
+            "remediacion": "Limitar Access-Control-Allow-Origin a una lista blanca de orígenes de confianza.",
+        })
+
+    # Análisis del HTML devuelto (lo mismo que recibe un navegador)
+    if "html" in headers.get("content-type", "").lower():
+        findings += analizar_html(r.text[:1_000_000], str(r.url))
 
     # Calidad de HSTS (si está presente)
     hsts = headers.get("strict-transport-security", "").lower()
@@ -196,20 +214,73 @@ async def check_http(url: str, timeout: float) -> dict:
     }
 
 
+_TAG_RE = re.compile(r"<(script|iframe|img|link|form|audio|video|source|embed|object)\b[^>]*>", re.I)
+_ATTR_RE = re.compile(r"""\b(src|href|action|data|integrity|rel)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.I)
+
+
+def _attrs(tag: str) -> dict[str, str]:
+    return {m.group(1).lower(): (m.group(2) or m.group(3) or m.group(4) or "") for m in _ATTR_RE.finditer(tag)}
+
+
+def analizar_html(html: str, url_pagina: str) -> list[dict]:
+    """Contenido mixto y scripts externos sin SRI, a partir del HTML de la página."""
+    findings: list[dict] = []
+    host_pagina = (urlparse(url_pagina).hostname or "").lower()
+    es_https = url_pagina.startswith("https://")
+    mixto_activo, mixto_pasivo, sin_sri = set(), set(), set()
+    for m in _TAG_RE.finditer(html):
+        tag, nombre = m.group(0), m.group(1).lower()
+        a = _attrs(tag)
+        if nombre == "link" and "stylesheet" not in a.get("rel", "").lower():
+            continue
+        destino = a.get("src") or a.get("href") or a.get("action") or a.get("data") or ""
+        if es_https and destino.lower().startswith("http://"):
+            (mixto_pasivo if nombre in ("img", "audio", "video", "source") else mixto_activo).add(destino[:120])
+        if nombre in ("script", "link") and destino:
+            h = (urlparse(destino if "//" in destino else "").hostname or "").lower()
+            if destino.startswith("//"):
+                h = (urlparse("https:" + destino).hostname or "").lower()
+            if h and h != host_pagina and not a.get("integrity"):
+                sin_sri.add(h)
+    if mixto_activo:
+        findings.append({
+            "id": "mixed-content-active", "severidad": "media",
+            "titulo": "Contenido mixto activo (scripts/estilos/iframes por HTTP)",
+            "detalle": "Recursos cargados sin cifrar en una página HTTPS: " + ", ".join(sorted(mixto_activo)[:5]),
+            "remediacion": "Cargar todos los recursos por https:// (o añadir la directiva CSP upgrade-insecure-requests).",
+        })
+    if mixto_pasivo:
+        findings.append({
+            "id": "mixed-content-passive", "severidad": "baja",
+            "titulo": "Contenido mixto pasivo (imágenes/multimedia por HTTP)",
+            "detalle": "Recursos multimedia sin cifrar: " + ", ".join(sorted(mixto_pasivo)[:5]),
+            "remediacion": "Servir también imágenes y multimedia por https://.",
+        })
+    if sin_sri:
+        findings.append({
+            "id": "no-sri", "severidad": "baja",
+            "titulo": "Scripts/estilos de terceros sin SRI",
+            "detalle": "Se cargan recursos externos sin atributo integrity desde: " + ", ".join(sorted(sin_sri)[:8])
+                       + ". Si ese tercero se compromete, el código malicioso se ejecuta en tu web.",
+            "remediacion": "Añadir integrity=\"sha384-…\" y crossorigin=\"anonymous\" a los recursos externos con versión fija.",
+        })
+    return findings
+
+
 def check_caa(hostname: str) -> dict:
     """CAA (RFC 8659): limita qué autoridades pueden emitir certificados para el dominio.
 
-    Solo lectura de DNS. Se comprueba el host y su dominio base (dos etiquetas).
+    Solo lectura de DNS. Igual que hace una CA (RFC 8659 §3), se sube por el árbol
+    DNS desde el host hasta el dominio de primer nivel: así funciona también con
+    sufijos de varias etiquetas (.co.uk, .com.es) sin necesitar la Public Suffix List.
     """
     findings: list[dict] = []
-    labels = hostname.split(".")
-    candidatos = [hostname]
-    if len(labels) > 2:
-        candidatos.append(".".join(labels[-2:]))
+    labels = hostname.strip(".").split(".")
+    candidatos = [".".join(labels[i:]) for i in range(len(labels) - 1)]
     encontrado = False
     for name in candidatos:
         try:
-            if len(dns.resolver.resolve(name, "CAA")) > 0:
+            if len(dns.resolver.resolve(name, "CAA", lifetime=5.0)) > 0:
                 encontrado = True
                 break
         except Exception:
@@ -247,13 +318,16 @@ async def check_http_redirect(url: str, timeout: float) -> dict:
     return {"redirige_https": redirige, "findings": findings}
 
 
-def check_tls(hostname: str, timeout: float) -> dict:
+def check_tls(hostname: str, timeout: float, port: int = 443) -> dict:
     """Comprueba el certificado TLS: validez, caducidad y versión del protocolo."""
     findings: list[dict] = []
     ctx = ssl.create_default_context()
     try:
         # Forzar IPv4 (ver nota en _ipv4_transport): resolvemos solo direcciones A.
-        addr = socket.getaddrinfo(hostname, 443, socket.AF_INET, socket.SOCK_STREAM)[0][4]
+        addr = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)[0][4]
+        # Anti-SSRF / DNS rebinding: la IP a la que conectamos también debe ser pública.
+        if not ipaddress.ip_address(addr[0]).is_global:
+            raise SsrfBloqueado(f"{hostname} resuelve a una IP no pública ({addr[0]}).")
         with socket.create_connection(addr, timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
                 cert = ssock.getpeercert()
@@ -263,7 +337,7 @@ def check_tls(hostname: str, timeout: float) -> dict:
             "severidad": "alta",
             "titulo": "No se pudo establecer TLS",
             "detalle": str(e),
-            "remediacion": "Revisar que el puerto 443 y el certificado estén bien configurados.",
+            "remediacion": f"Revisar que el puerto {port} y el certificado estén bien configurados.",
         }]}
 
     # Caducidad del certificado

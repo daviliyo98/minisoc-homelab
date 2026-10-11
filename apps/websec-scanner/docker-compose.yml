@@ -14,11 +14,26 @@ services:
       ZAP_ENABLED: "${ZAP_ENABLED:-0}"
       ZAP_API_KEY: "${ZAP_API_KEY:-}"
       ZAP_BASE: "http://zap:8080"
+      # Claves con roles (nombre:rol:clave, separadas por comas). API_KEY sigue valiendo como admin.
+      API_KEYS: "${API_KEYS:-}"
+      RATE_LIMIT_PER_MIN: "${RATE_LIMIT_PER_MIN:-60}"
+      JOBS_MAX_CONCURRENT: "${JOBS_MAX_CONCURRENT:-1}"
+      REQUIRE_VERIFIED_DOMAIN: "${REQUIRE_VERIFIED_DOMAIN:-0}"
+      # Monitorización y alertas
+      MONITOR_ENABLED: "${MONITOR_ENABLED:-1}"
+      ALERT_MIN_CVSS: "${ALERT_MIN_CVSS:-4.0}"
+      ALERT_CERT_DAYS: "${ALERT_CERT_DAYS:-21}"
+      ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
     ports:
       - "192.168.1.20:8001:8000"   # accesible solo desde tu red, puerto 8001
     read_only: true                # sistema de archivos de solo lectura
     tmpfs:
       - /tmp
+    volumes:
+      - websec-data:/data          # SQLite: historial, activos, auditoría (lo único escribible)
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -64,3 +79,6 @@ services:
     # sitios reales con páginas grandes). Damos holgura: 2,5 GB.
     mem_limit: 2560m
     restart: unless-stopped
+
+volumes:
+  websec-data:

@@ -1,44 +1,65 @@
 """
-websec-scanner — Analizador PASIVO de postura de seguridad web.
+websec-scanner — Analizador de postura de seguridad web (MINISOC).
 
-Solo observa lo que el servidor expone públicamente. No sondea rutas
-ni prueba parámetros. Requiere una clave de API para usarse.
+Pasivo por defecto: solo observa lo que el servidor expone públicamente. Los
+módulos activos (Nuclei, ZAP, testssl.sh) van tras varios candados.
+Requiere una clave de API (ver auth.py para roles).
 
 Documentación interactiva en /docs una vez arrancado.
 """
 from __future__ import annotations
 
+import asyncio
 import os
+import socket
 import threading
-import time
-import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
-from pathlib import Path
-
+import dns.resolver
 import httpx
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, field_validator
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from pydantic import BaseModel, Field, field_validator
 
-from . import activescan, checks, dnsrecon, mailcheck, severity, zapscan
+from . import activescan, checks, jobs, monitor, report, scanners, store, tlsdeep, zapscan
+from .auth import Ident, audit, require
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
-API_KEY = os.environ.get("API_KEY", "")
 # El modo activo (Nuclei) está DESACTIVADO salvo que se active explícitamente.
 ACTIVE_ENABLED = os.environ.get("ACTIVE_SCAN_ENABLED", "") == "1"
 # Integración con OWASP ZAP (contenedor aparte). Desactivada salvo que se pida.
 ZAP_ENABLED = os.environ.get("ZAP_ENABLED", "") == "1"
 ZAP_API_KEY = os.environ.get("ZAP_API_KEY", "")
 ZAP_BASE = os.environ.get("ZAP_BASE", "http://zap:8080")
+# Si es 1, los escaneos activos solo se permiten contra dominios verificados por DNS.
+REQUIRE_VERIFIED = os.environ.get("REQUIRE_VERIFIED_DOMAIN", "") == "1"
+# Token opcional para /metrics (Authorization: Bearer ...). Vacío = abierto en la LAN.
+METRICS_TOKEN = os.environ.get("METRICS_TOKEN", "")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    store.init()
+    monitor.start()
+    yield
+    monitor.stop()
+
 
 app = FastAPI(
     title="MINISOC websec-scanner",
-    description="Analizador pasivo de postura de seguridad web (solo observa lo público).",
-    version="1.0.0",
+    description="Analizador de postura de seguridad web: pasivo por defecto, activo bajo autorización.",
+    version="2.0.0",
+    lifespan=lifespan,
 )
+
+
+def _http(e: scanners.ScanError) -> HTTPException:
+    return HTTPException(e.status, e.mensaje)
 
 
 class ScanRequest(BaseModel):
@@ -47,24 +68,14 @@ class ScanRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validar(cls, v: str) -> str:
-        if not urlparse(v).scheme:
-            v = "https://" + v
-        p = urlparse(v)
-        if p.scheme not in ("http", "https"):
-            raise ValueError("Solo se admiten URLs http/https.")
-        if not p.hostname:
-            raise ValueError("URL sin host válido.")
-        # El bloqueo de objetivos internos/reservados (anti-SSRF) se hace en el
-        # endpoint con checks.es_publico(), que da un mensaje claro (400) en vez
-        # del error de validación 422.
-        return v
+        try:
+            return scanners.normalizar_url(v.strip())
+        except scanners.ScanError as e:
+            raise ValueError(e.mensaje)
 
 
-def _auth(x_api_key: str | None) -> None:
-    if not API_KEY:
-        raise HTTPException(500, "El servidor no tiene API_KEY configurada.")
-    if x_api_key != API_KEY:
-        raise HTTPException(401, "Clave de API inválida o ausente.")
+class DomainRequest(BaseModel):
+    domain: str
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -78,220 +89,166 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-class MailScanRequest(BaseModel):
-    domain: str
+@app.get("/whoami")
+def whoami(ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Nombre y rol de la clave usada, y qué módulos están habilitados en el servidor."""
+    return {"usuario": ident.nombre, "rol": ident.rol,
+            "modulos": {"activo": ACTIVE_ENABLED, "zap": ZAP_ENABLED, "tls_profundo": tlsdeep.disponible(),
+                        "verificacion_obligatoria": REQUIRE_VERIFIED},
+            "monitor": monitor.estado()}
 
 
-class DnsScanRequest(BaseModel):
-    domain: str
-
-
-@app.post("/scan-dns")
-def scan_dns(req: DnsScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Reconocimiento DNS pasivo de un dominio (A/AAAA/MX/NS/SOA/TXT/CAA).
-
-    Analiza la postura de infraestructura (redundancia de NS, colocación de
-    correo y web, CAA, DNSSEC). Síncrono: dns.resolver es bloqueante y FastAPI
-    lo ejecuta en un hilo.
-    """
-    _auth(x_api_key)
-    res = dnsrecon.scan(req.domain)
-    if res.get("error"):
-        raise HTTPException(400, res["error"])
-    severity.enrich(res["hallazgos"], "dns")
-    res["hallazgos"].sort(key=lambda f: -(f.get("cvss_score") or 0.0))
-    res["resumen"] = severity.resumen(res["hallazgos"])
-    res["cvss_max"] = severity.cvss_max(res["hallazgos"])
-    res["pago_por_hallazgo"] = severity.pago_por_hallazgo(res["hallazgos"])
+# --------------------------------------------------------------------------- #
+#  Escaneos pasivos (síncronos, se guardan en el historial)
+# --------------------------------------------------------------------------- #
+async def _ejecutar(request: Request, ident: Ident, tipo: str, objetivo: str, corrutina) -> dict:
+    sid = store.new_scan(tipo, objetivo, usuario=ident.nombre)
+    try:
+        res = await corrutina
+    except scanners.ScanError as e:
+        store.fail_scan(sid, e.mensaje)
+        audit(request, ident, f"scan-{tipo}", objetivo, f"error {e.status}")
+        raise _http(e)
+    except Exception as e:
+        store.fail_scan(sid, f"{type(e).__name__}: {e}")
+        raise
+    res["scan_id"] = sid
+    store.finish_scan(sid, res)
+    audit(request, ident, f"scan-{tipo}", objetivo, "ok")
     return res
 
 
-@app.post("/scan-mail")
-def scan_mail(req: MailScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Analiza la postura de seguridad del correo de un dominio (SPF/DKIM/DMARC).
-
-    Responde a: ¿puede suplantarse este dominio para enviar correo en su nombre?
-    Endpoint síncrono: dns.resolver es bloqueante y FastAPI lo ejecuta en un hilo.
-    """
-    _auth(x_api_key)
-    res = mailcheck.scan(req.domain)
-    severity.enrich(res["hallazgos"], "correo")
-    res["hallazgos"].sort(key=lambda f: -(f.get("cvss_score") or 0.0))
-    res["resumen"] = severity.resumen(res["hallazgos"])
-    res["cvss_max"] = severity.cvss_max(res["hallazgos"])
-    res["pago_por_hallazgo"] = severity.pago_por_hallazgo(res["hallazgos"])
-    return res
+def _hilo(fn, *args):
+    return asyncio.to_thread(fn, *args)
 
 
 @app.post("/scan")
-async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Analiza la postura de seguridad pública de una URL.
-
-    Checks: cabeceras HTTP de seguridad, configuración TLS y security.txt.
-    """
-    _auth(x_api_key)
-    timeout = 10.0
-    host = urlparse(req.url if urlparse(req.url).scheme else "https://" + req.url).hostname
-
-    # Anti-SSRF: el host debe resolver SOLO a IPs públicas.
-    if not checks.es_publico(host or ""):
-        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
-
-    try:
-        http_res = await checks.check_http(req.url, timeout)
-    except checks.SsrfBloqueado as e:
-        raise HTTPException(400, str(e))
-    except httpx.ConnectError:
-        raise HTTPException(502, "No se pudo conectar con el objetivo: el puerto puede estar cerrado o el host no acepta HTTPS.")
-    except httpx.TimeoutException:
-        raise HTTPException(504, "El objetivo no respondió a tiempo.")
-    except httpx.RequestError as e:
-        raise HTTPException(502, f"Error al contactar con el objetivo: {type(e).__name__}")
-    tls_res = checks.check_tls(host, timeout) if http_res["https"] else {
-        "ok": False, "nota": "Sin HTTPS, no se analiza TLS.", "findings": [{
-            "severidad": "alta", "titulo": "El sitio no usa HTTPS",
-            "detalle": "El tráfico viaja sin cifrar.",
-            "remediacion": "Instalar un certificado y forzar HTTPS."}]}
-    sectxt = await checks.check_security_txt(req.url, timeout)
-    caa = checks.check_caa(host) if host else {"caa": None, "findings": []}
-    redir = await checks.check_http_redirect(req.url, timeout)
-
-    todos = (http_res["findings"] + tls_res.get("findings", [])
-             + caa["findings"] + redir["findings"])
-    # Enriquecer con CVSS v3.1: asigna vector/puntuación/tramo/CWE/OWASP y
-    # recalcula `severidad` de forma coherente (corrige severidades infladas,
-    # p. ej. la ausencia de CSP/HSTS deja de ser "alta").
-    todos = severity.enrich(todos, "web")
-    todos.sort(key=lambda f: -(f.get("cvss_score") or 0.0))  # lo más grave primero
-
-    # Puntuación 0–100 heredada (la UI aún la muestra), recalculada con las
-    # severidades ya corregidas por CVSS.
-    pen = {"alta": 20, "media": 8, "baja": 3}
-    nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
-
-    # Resultado concreto de cada comprobación (no solo los hallazgos)
-    cab = http_res.get("cabeceras_seguridad", {})
-    nombres_cab = {
-        "strict-transport-security": "HSTS", "content-security-policy": "CSP",
-        "x-frame-options": "X-Frame-Options", "x-content-type-options": "X-Content-Type-Options",
-        "referrer-policy": "Referrer-Policy", "permissions-policy": "Permissions-Policy",
-    }
-    rh = redir.get("redirige_https")
-    comprobaciones = [
-        {"nombre": "HTTPS", "estado": "ok" if http_res["https"] else "falta",
-         "detalle": "activo" if http_res["https"] else "el sitio no cifra"},
-        {"nombre": "Redirección HTTP→HTTPS",
-         "estado": "ok" if rh else ("aviso" if rh is False else "info"),
-         "detalle": "redirige" if rh else ("no redirige" if rh is False else "no comprobable")},
-        {"nombre": "TLS", "estado": "ok" if tls_res.get("ok") else "falta",
-         "detalle": (f"{tls_res.get('version', '')} · caduca en {tls_res.get('dias_para_caducar', '?')}d") if tls_res.get("ok") else "no disponible"},
-    ]
-    for h, label in nombres_cab.items():
-        comprobaciones.append({"nombre": label, "estado": "ok" if cab.get(h) else "falta",
-                               "detalle": "presente" if cab.get(h) else "ausente"})
-    comprobaciones.append({"nombre": "CAA", "estado": "ok" if caa.get("caa") else "aviso",
-                           "detalle": "presente" if caa.get("caa") else "sin CAA"})
-    comprobaciones.append({"nombre": "security.txt", "estado": "ok" if sectxt.get("existe") else "info",
-                           "detalle": sectxt.get("ruta", "no publicado") if sectxt.get("existe") else "no publicado"})
-
-    return {
-        "objetivo": http_res["url_final"],
-        "puntuacion": nota,
-        "cvss_max": severity.cvss_max(todos),
-        "comprobaciones": comprobaciones,
-        "resumen": severity.resumen(todos),
-        "pago_por_hallazgo": severity.pago_por_hallazgo(todos),
-        "tls": {k: v for k, v in tls_res.items() if k != "findings"},
-        "security_txt": sectxt,
-        "caa": caa.get("caa"),
-        "redirige_https": redir.get("redirige_https"),
-        "hallazgos": todos,
-        "aviso": "Diagnóstico pasivo de la exposición pública de la web. Útil para detectar "
-                 "configuraciones ausentes o débiles, pero NO sustituye una auditoría interna "
-                 "del servidor ni una prueba de penetración (pentest). "
-                 "Escanee solo sistemas propios o autorizados.",
-    }
+async def scan(req: ScanRequest, request: Request, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Postura de seguridad pública de una URL: cabeceras, TLS, CAA, security.txt, contenido mixto, SRI, CORS."""
+    return await _ejecutar(request, ident, "web", req.url, scanners.run_web(req.url))
 
 
+@app.post("/scan-mail")
+async def scan_mail(req: DomainRequest, request: Request, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """¿Puede suplantarse este dominio para enviar correo? (SPF/DKIM/DMARC/MTA-STS/TLS-RPT/BIMI)."""
+    dom = scanners.dominio_de(req.domain)
+    return await _ejecutar(request, ident, "correo", dom, _hilo(scanners.run_mail, dom))
+
+
+@app.post("/scan-dns")
+async def scan_dns(req: DomainRequest, request: Request, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Reconocimiento DNS pasivo (A/AAAA/MX/NS/SOA/TXT/CAA) y postura de infraestructura."""
+    dom = scanners.dominio_de(req.domain)
+    return await _ejecutar(request, ident, "dns", dom, _hilo(scanners.run_dns, dom))
+
+
+@app.post("/scan-recon")
+async def scan_recon(req: DomainRequest, request: Request, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Superficie expuesta: subdominios (Certificate Transparency), takeover y puertos/CVEs (Shodan InternetDB)."""
+    dom = scanners.dominio_de(req.domain)
+    return await _ejecutar(request, ident, "recon", dom, _hilo(scanners.run_recon, dom))
+
+
+class FullScanRequest(ScanRequest):
+    domain: str | None = None
+
+
+@app.post("/scan-full")
+async def scan_full(req: FullScanRequest, request: Request, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Web + correo + DNS en paralelo, con puntuación global. `domain` es opcional (por defecto, el de la URL)."""
+    dom = scanners.dominio_de(req.domain or req.url)
+    return await _ejecutar(request, ident, "full", dom, scanners.run_full(req.url, req.domain))
+
+
+# --------------------------------------------------------------------------- #
+#  Escaneos activos en segundo plano (Nuclei, ZAP, testssl.sh)
+# --------------------------------------------------------------------------- #
 class ActiveScanRequest(ScanRequest):
-    """Hereda la validación de URL de ScanRequest (incluido el bloqueo anti-SSRF)."""
     autorizo: bool = False
 
 
 class ZapScanRequest(ActiveScanRequest):
-    """Petición de escaneo con ZAP. `activo=True` añade el escaneo de inyección."""
+    """`activo=True` añade el escaneo de inyección (intrusivo)."""
     activo: bool = False
 
 
-# --- Trabajos en segundo plano para el escaneo activo (es largo) ---
-# El escaneo con Nuclei tarda minutos: no cabe en una petición/respuesta. Se
-# lanza en un hilo, se devuelve un ticket, y el cliente consulta el estado.
-_JOBS: dict[str, dict] = {}
-_JOBS_LOCK = threading.Lock()
-_MAX_JOBS = 20
+def _dominio_verificado(host: str) -> bool:
+    host = host.lower().strip(".")
+    return any(host == d or host.endswith("." + d) for d in store.verified_domains())
 
 
-def _puntuar(todos: list[dict]) -> int:
-    pen = {"alta": 20, "media": 8, "baja": 3}
-    return max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
+def _candados(req: ActiveScanRequest, request: Request, ident: Ident, accion: str) -> str:
+    """Comprobaciones comunes de los escaneos activos. Devuelve el host validado."""
+    if not req.autorizo:
+        raise HTTPException(400, "El escaneo requiere confirmar la autorización (autorizo=true).")
+    host = urlparse(req.url).hostname or ""
+    if not checks.es_publico(host):
+        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
+    if REQUIRE_VERIFIED and not _dominio_verificado(host):
+        audit(request, ident, accion, req.url, "dominio no verificado")
+        raise HTTPException(403, f"{host} no pertenece a ningún dominio verificado. Verifícalo antes en POST /verify.")
+    return host
 
 
-def _finalizar_job(job_id: str, res: dict, *, modo: str, motor: str, url: str, aviso: str) -> None:
-    """Vuelca el resultado de un escaneo (Nuclei o ZAP) en el trabajo."""
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None:
-            return
-        if not res.get("ok"):
-            job["status"] = "error"
-            job["error"] = res.get("error", "No se pudo ejecutar el escaneo.")
-            return
-        todos = res["findings"]
-        severity.enrich(todos, "activo" if motor == "nuclei" else "zap")
-        todos.sort(key=lambda f: -(f.get("cvss_score") or 0.0))
-        job["status"] = "done"
-        job["result"] = {
-            "objetivo": url, "modo": modo, "motor": motor,
-            "puntuacion": _puntuar(todos),
-            "cvss_max": severity.cvss_max(todos),
-            "resumen": severity.resumen(todos),
-            "pago_por_hallazgo": severity.pago_por_hallazgo(todos),
-            "hallazgos": todos,
-            "aviso": aviso,
-        }
+@app.post("/scan-active")
+def scan_active(req: ActiveScanRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Escaneo ACTIVO con Nuclei en segundo plano. Devuelve un ticket (job_id).
+
+    Candados: ACTIVE_SCAN_ENABLED=1 · rol 'activo' · autorizo=true · anti-SSRF ·
+    dominio verificado (si REQUIRE_VERIFIED_DOMAIN=1). Estado en GET /scan-status/{job_id}.
+    """
+    if not ACTIVE_ENABLED:
+        raise HTTPException(403, "El modo activo está desactivado. Actívalo con ACTIVE_SCAN_ENABLED=1 en el servidor.")
+    _candados(req, request, ident, "scan-active")
+    url = req.url
+
+    def trabajo(sid: str, cancel: threading.Event) -> dict:
+        jobs.log(sid, "Nuclei: lanzando plantillas (cve, misconfig, exposure…)")
+        return activescan.scan_activo(url, timeout_total=420.0, cancel=cancel)
+
+    sid = jobs.lanzar("nuclei", url, ident.nombre, trabajo, motor="nuclei",
+                      aviso="Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO "
+                            "con autorización explícita y por escrito del titular del sistema.")
+    audit(request, ident, "scan-active", url, f"job {sid}")
+    return {"job_id": sid, "status": "queued", "objetivo": url}
 
 
-def _run_active_job(job_id: str, url: str) -> None:
-    res = activescan.scan_activo(url, timeout_total=420.0)
-    _finalizar_job(
-        job_id, res, modo="activo", motor="nuclei", url=url,
-        aviso="Escaneo ACTIVO con Nuclei (sin plantillas destructivas). Ejecútelo SOLO "
-              "con autorización explícita y por escrito del titular del sistema.",
-    )
+def _zap_parar() -> None:
+    try:
+        with httpx.Client(timeout=5) as c:
+            for comp in ("spider", "ascan"):
+                c.get(f"{ZAP_BASE}/JSON/{comp}/action/stopAllScans/", params={"apikey": ZAP_API_KEY})
+    except Exception:
+        pass
 
 
-def _log_job(job_id: str, msg: str) -> None:
-    """Añade una línea con hora al log del trabajo (acotado a 80 líneas)."""
-    linea = time.strftime("%H:%M:%S") + "  " + msg
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None:
-            return
-        log = job.setdefault("log", [])
-        log.append(linea)
-        if len(log) > 80:
-            del log[:-80]
+@app.post("/scan-zap")
+def scan_zap(req: ZapScanRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Escaneo con OWASP ZAP en segundo plano (spider + pasivo; `activo=true` añade inyección).
 
-
-def _run_zap_job(job_id: str, url: str, activo: bool) -> None:
-    res = zapscan.scan_zap(
-        url, activo=activo, base=ZAP_BASE, api_key=ZAP_API_KEY,
-        # Sitios reales de clientes tardan: el pasivo (spider+análisis) puede
-        # necesitar varios minutos. 10 min pasivo / 20 min activo.
-        timeout_total=(1200.0 if activo else 600.0), es_publico=checks.es_publico,
-        log=lambda m: _log_job(job_id, m),
-    )
+    Candados: ZAP_ENABLED=1 · rol 'activo' · autorizo=true · anti-SSRF · dominio verificado
+    (si se exige). `activo=true` requiere además ACTIVE_SCAN_ENABLED=1.
+    """
+    if not ZAP_ENABLED:
+        raise HTTPException(403, "La integración con ZAP está desactivada. Actívala con ZAP_ENABLED=1 y arranca el contenedor 'zap'.")
+    if req.activo and not ACTIVE_ENABLED:
+        raise HTTPException(403, "El escaneo ACTIVO de ZAP (inyección) requiere ACTIVE_SCAN_ENABLED=1 en el servidor.")
+    _candados(req, request, ident, "scan-zap")
+    url, activo = req.url, req.activo
     modo = "zap-activo" if activo else "zap-pasivo"
+
+    def trabajo(sid: str, cancel: threading.Event) -> dict:
+        try:
+            return zapscan.scan_zap(
+                url, activo=activo, base=ZAP_BASE, api_key=ZAP_API_KEY,
+                # Sitios reales tardan: 10 min pasivo / 20 min activo.
+                timeout_total=(1200.0 if activo else 600.0), es_publico=checks.es_publico,
+                log=lambda m: jobs.log(sid, m),
+            )
+        except jobs.CanceladoPorUsuario:
+            _zap_parar()
+            raise
+
     if activo:
         aviso = ("Escaneo ACTIVO con OWASP ZAP: inyecta cargas (SQLi, XSS, etc.) sobre los "
                  "parámetros descubiertos. Es INTRUSIVO. Ejecútelo SOLO con autorización "
@@ -299,87 +256,247 @@ def _run_zap_job(job_id: str, url: str, activo: bool) -> None:
     else:
         aviso = ("Escaneo con OWASP ZAP (spider + análisis pasivo): rastrea el sitio y analiza "
                  "las respuestas sin inyectar cargas. Escanee solo sistemas propios o autorizados.")
-    _finalizar_job(job_id, res, modo=modo, motor="zap", url=url, aviso=aviso)
+    sid = jobs.lanzar(modo, url, ident.nombre, trabajo, motor="zap", aviso=aviso)
+    audit(request, ident, "scan-zap", url, f"job {sid} {modo}")
+    return {"job_id": sid, "status": "queued", "objetivo": url, "modo": modo}
 
 
-@app.post("/scan-active")
-def scan_active(req: ActiveScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Lanza un escaneo ACTIVO (Nuclei) en segundo plano y devuelve un ticket.
+@app.post("/scan-tls")
+def scan_tls(req: ActiveScanRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Análisis TLS a fondo con testssl.sh (protocolos, cifrados, cadena, Heartbleed, ROBOT…), en segundo plano."""
+    if not tlsdeep.disponible():
+        raise HTTPException(503, "testssl.sh no está instalado en el contenedor.")
+    host = _candados(req, request, ident, "scan-tls")
+    port = urlparse(req.url).port or 443
+    try:
+        ip = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    except OSError:
+        raise HTTPException(400, f"No se pudo resolver {host} a una IPv4.")
+    objetivo = f"{host}:{port}"
 
-    Triple candado: 1) ACTIVE_SCAN_ENABLED=1  2) autorizo=true  3) anti-SSRF.
-    El resultado se consulta luego en GET /scan-status/{job_id}.
-    """
-    _auth(x_api_key)
-    if not ACTIVE_ENABLED:
-        raise HTTPException(403, "El modo activo está desactivado. Actívalo con ACTIVE_SCAN_ENABLED=1 en el servidor.")
-    if not req.autorizo:
-        raise HTTPException(400, "El escaneo activo requiere confirmar la autorización (autorizo=true).")
+    def trabajo(sid: str, cancel: threading.Event) -> dict:
+        jobs.log(sid, f"testssl.sh contra {objetivo} ({ip}); suele tardar 3-8 min en la Pi…")
+        return tlsdeep.scan_tls(host, ip, port, cancel=cancel)
 
-    host = urlparse(req.url).hostname or ""
-    if not checks.es_publico(host):
-        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
-
-    job_id = uuid.uuid4().hex
-    with _JOBS_LOCK:
-        # Poda: si hay demasiados trabajos, quitamos el más antiguo.
-        if len(_JOBS) >= _MAX_JOBS:
-            viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
-            _JOBS.pop(viejo, None)
-        _JOBS[job_id] = {"status": "running", "started": time.time(),
-                         "objetivo": req.url, "result": None, "error": None, "log": []}
-    threading.Thread(target=_run_active_job, args=(job_id, req.url), daemon=True).start()
-    return {"job_id": job_id, "status": "running", "objetivo": req.url}
-
-
-@app.post("/scan-zap")
-def scan_zap(req: ZapScanRequest, x_api_key: str | None = Header(default=None)) -> dict:
-    """Lanza un escaneo con OWASP ZAP en segundo plano y devuelve un ticket.
-
-    Candados:
-      • ZAP_ENABLED=1 en el servidor (y el contenedor 'zap' arrancado).
-      • autorizo=true en la petición.
-      • anti-SSRF: el objetivo debe resolver a una IP pública.
-      • activo=true (escaneo de inyección, INTRUSIVO) requiere ADEMÁS
-        ACTIVE_SCAN_ENABLED=1, igual que Nuclei.
-    El resultado se consulta luego en GET /scan-status/{job_id}.
-    """
-    _auth(x_api_key)
-    if not ZAP_ENABLED:
-        raise HTTPException(403, "La integración con ZAP está desactivada. Actívala con ZAP_ENABLED=1 y arranca el contenedor 'zap'.")
-    if not req.autorizo:
-        raise HTTPException(400, "El escaneo con ZAP requiere confirmar la autorización (autorizo=true).")
-    if req.activo and not ACTIVE_ENABLED:
-        raise HTTPException(403, "El escaneo ACTIVO de ZAP (inyección) requiere ACTIVE_SCAN_ENABLED=1 en el servidor.")
-
-    host = urlparse(req.url).hostname or ""
-    if not checks.es_publico(host):
-        raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
-
-    job_id = uuid.uuid4().hex
-    with _JOBS_LOCK:
-        if len(_JOBS) >= _MAX_JOBS:
-            viejo = min(_JOBS, key=lambda k: _JOBS[k]["started"])
-            _JOBS.pop(viejo, None)
-        _JOBS[job_id] = {"status": "running", "started": time.time(),
-                         "objetivo": req.url, "result": None, "error": None, "log": []}
-    threading.Thread(target=_run_zap_job, args=(job_id, req.url, req.activo), daemon=True).start()
-    return {"job_id": job_id, "status": "running", "objetivo": req.url,
-            "modo": "zap-activo" if req.activo else "zap-pasivo"}
+    sid = jobs.lanzar("tls", objetivo, ident.nombre, trabajo, motor="testssl",
+                      aviso="Análisis TLS con testssl.sh: realiza cientos de handshakes, algunos con paquetes "
+                            "anómalos para detectar vulnerabilidades. Solo sistemas propios o autorizados.")
+    audit(request, ident, "scan-tls", objetivo, f"job {sid}")
+    return {"job_id": sid, "status": "queued", "objetivo": objetivo}
 
 
 @app.get("/scan-status/{job_id}")
-def scan_status(job_id: str, x_api_key: str | None = Header(default=None)) -> dict:
-    """Consulta el estado/resultado de un escaneo activo en segundo plano."""
-    _auth(x_api_key)
-    with _JOBS_LOCK:
-        job = _JOBS.get(job_id)
-        if job is None:
-            raise HTTPException(404, "Trabajo no encontrado o caducado.")
-        out: dict = {"status": job["status"], "objetivo": job["objetivo"]}
-        if job.get("log"):
-            out["log"] = list(job["log"])
-        if job["status"] == "done":
-            out["result"] = job["result"]
-        elif job["status"] == "error":
-            out["error"] = job["error"]
-        return out
+def scan_status(job_id: str, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Estado/resultado de un trabajo en segundo plano (compatible con la UI anterior)."""
+    s = store.get_scan(job_id)
+    if s is None:
+        raise HTTPException(404, "Trabajo no encontrado.")
+    estado = {"queued": "running", "cancelled": "error"}.get(s["status"], s["status"])
+    out: dict = {"status": estado, "estado_real": s["status"], "objetivo": s["objetivo"]}
+    if s["status"] == "queued":
+        out["log"] = ["En cola: esperando a que termine otro escaneo activo…"] + (s.get("log") or [])
+    elif s.get("log"):
+        out["log"] = s["log"]
+    if s["status"] == "done":
+        out["result"] = s["result"]
+    elif s["status"] in ("error", "cancelled"):
+        out["error"] = s["error"]
+    return out
+
+
+# --------------------------------------------------------------------------- #
+#  Historial, comparación e informes
+# --------------------------------------------------------------------------- #
+@app.get("/scans")
+def scans(objetivo: str | None = None, tipo: str | None = None, asset_id: str | None = None,
+          limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0),
+          ident: Ident = Depends(require("pasivo"))) -> list[dict]:
+    """Historial de escaneos (sin el resultado completo). Filtros: objetivo (contiene), tipo, asset_id."""
+    return store.list_scans(objetivo=objetivo, tipo=tipo, asset_id=asset_id, limit=limit, offset=offset)
+
+
+def _scan_o_404(sid: str) -> dict:
+    s = store.get_scan(sid)
+    if s is None:
+        raise HTTPException(404, "Escaneo no encontrado.")
+    return s
+
+
+@app.get("/scans/{sid}")
+def scan_detalle(sid: str, ident: Ident = Depends(require("pasivo"))) -> dict:
+    return _scan_o_404(sid)
+
+
+@app.delete("/scans/{sid}")
+def scan_borrar(sid: str, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Cancela el escaneo si está en cola/en curso; si ya terminó, lo borra del historial."""
+    s = _scan_o_404(sid)
+    if s["status"] in ("queued", "running"):
+        ok = jobs.cancelar(sid)
+        audit(request, ident, "cancelar", s["objetivo"], sid)
+        return {"cancelado": ok}
+    store.delete_scan(sid)
+    audit(request, ident, "borrar", s["objetivo"], sid)
+    return {"borrado": True}
+
+
+@app.get("/scans/{sid}/diff")
+def scan_diff(sid: str, contra: str | None = None, ident: Ident = Depends(require("pasivo"))) -> dict:
+    """Compara con otro escaneo (`contra`) o, por defecto, con el anterior del mismo objetivo y tipo."""
+    actual = _scan_o_404(sid)
+    anterior = _scan_o_404(contra) if contra else store.previous_scan(sid)
+    if anterior is None:
+        raise HTTPException(404, "No hay un escaneo anterior con el que comparar.")
+    return {"actual": sid, "anterior": anterior["id"], "fecha_anterior": anterior["started"],
+            **report.diff(anterior.get("result"), actual.get("result"))}
+
+
+@app.get("/scans/{sid}/report")
+def scan_report(sid: str, format: Literal["html", "md", "json", "sarif"] = "html",
+                ident: Ident = Depends(require("pasivo"))):
+    """Informe descargable. HTML (imprimible a PDF), Markdown, JSON o SARIF 2.1.0."""
+    s = _scan_o_404(sid)
+    if s["status"] != "done":
+        raise HTTPException(409, f"El escaneo no ha terminado (estado: {s['status']}).")
+    previo = store.previous_scan(sid)
+    cambios = report.diff(previo["result"], s["result"]) if previo else None
+    nombre = f"informe-{scanners.dominio_de(s['objetivo']) or 'objetivo'}-{sid[:8]}"
+    if format == "html":
+        return HTMLResponse(report.render_html(s, cambios))
+    if format == "md":
+        cuerpo, mime, ext = report.render_md(s, cambios), "text/markdown; charset=utf-8", "md"
+    elif format == "sarif":
+        cuerpo, mime, ext = report.render_sarif(s), "application/sarif+json", "sarif"
+    else:
+        cuerpo, mime, ext = report.render_json(s), "application/json", "json"
+    return Response(cuerpo, media_type=mime,
+                    headers={"Content-Disposition": f'attachment; filename="{nombre}.{ext}"'})
+
+
+# --------------------------------------------------------------------------- #
+#  Activos monitorizados y alertas
+# --------------------------------------------------------------------------- #
+class AssetRequest(BaseModel):
+    objetivo: str
+    tipo: Literal["web", "correo", "dns", "recon", "full"] = "full"
+    intervalo_h: float = Field(24.0, ge=1.0, le=24 * 30)
+
+
+@app.get("/assets")
+def assets(ident: Ident = Depends(require("pasivo"))) -> list[dict]:
+    """Activos monitorizados, con el resumen de su último escaneo."""
+    out = []
+    for a in store.list_assets():
+        s = store.latest_asset_scan(a["id"])
+        r = (s or {}).get("result") or {}
+        out.append({**a, "ultimo_scan": (s or {}).get("id"), "puntuacion": r.get("puntuacion"),
+                    "cvss_max": r.get("cvss_max")})
+    return out
+
+
+@app.post("/assets")
+def asset_crear(req: AssetRequest, request: Request, ident: Ident = Depends(require("admin"))) -> dict:
+    """Da de alta (o actualiza) un activo y lo escanea en la próxima vuelta del planificador (≤1 min)."""
+    if req.tipo in ("web", "full"):
+        try:
+            objetivo = scanners.normalizar_url(req.objetivo.strip())
+        except scanners.ScanError as e:
+            raise _http(e)
+        if not checks.es_publico(urlparse(objetivo).hostname or ""):
+            raise HTTPException(400, "Objetivo no permitido: resuelve a una dirección interna o reservada.")
+    else:
+        objetivo = scanners.dominio_de(req.objetivo)
+        if "." not in objetivo:
+            raise HTTPException(400, "Dominio no válido.")
+    a = store.add_asset(req.tipo, objetivo, req.intervalo_h)
+    audit(request, ident, "asset-alta", objetivo, a["id"])
+    return a
+
+
+@app.delete("/assets/{aid}")
+def asset_borrar(aid: str, request: Request, ident: Ident = Depends(require("admin"))) -> dict:
+    a = store.get_asset(aid)
+    if not a or not store.delete_asset(aid):
+        raise HTTPException(404, "Activo no encontrado.")
+    audit(request, ident, "asset-baja", a["objetivo"], aid)
+    return {"borrado": True}
+
+
+@app.post("/assets/{aid}/run")
+def asset_run(aid: str, request: Request, ident: Ident = Depends(require("admin"))) -> dict:
+    """Fuerza un escaneo inmediato del activo (en segundo plano)."""
+    a = store.get_asset(aid)
+    if not a:
+        raise HTTPException(404, "Activo no encontrado.")
+    threading.Thread(target=monitor.escanear_asset, args=(a,), daemon=True).start()
+    audit(request, ident, "asset-run", a["objetivo"], aid)
+    return {"lanzado": True, "asset": a["objetivo"]}
+
+
+@app.post("/alerts/test")
+def alerts_test(ident: Ident = Depends(require("admin"))) -> dict:
+    """Envía una alerta de prueba por los canales configurados (webhook/Telegram)."""
+    if not monitor.canales():
+        raise HTTPException(400, "No hay canales configurados (ALERT_WEBHOOK_URL o TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID).")
+    return monitor.enviar_alerta("Prueba de alertas", [f"Enviada por {ident.nombre} desde websec-scanner."])
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics(authorization: str | None = Header(default=None)) -> str:
+    """Métricas Prometheus de los activos monitorizados."""
+    if METRICS_TOKEN and authorization != f"Bearer {METRICS_TOKEN}":
+        raise HTTPException(401, "Token de métricas inválido.")
+    return monitor.metrics(jobs.en_curso())
+
+
+# --------------------------------------------------------------------------- #
+#  Auditoría
+# --------------------------------------------------------------------------- #
+@app.get("/audit")
+def audit_log(limit: int = Query(100, ge=1, le=1000), usuario: str | None = None,
+              ident: Ident = Depends(require("admin"))) -> list[dict]:
+    """Registro de quién escaneó qué y cuándo (incluye intentos con clave inválida)."""
+    return store.list_audit(limit, usuario)
+
+
+# --------------------------------------------------------------------------- #
+#  Verificación de propiedad de dominios (para escaneos activos)
+# --------------------------------------------------------------------------- #
+VERIFY_PREFIX = "minisoc-verify="
+
+
+@app.post("/verify")
+def verify_iniciar(req: DomainRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Genera (o devuelve) el token que el titular debe publicar en DNS para demostrar el control del dominio."""
+    dom = scanners.dominio_de(req.domain)
+    if "." not in dom:
+        raise HTTPException(400, "Dominio no válido.")
+    v = store.get_or_create_token(dom)
+    audit(request, ident, "verify-token", dom)
+    return {"dominio": dom, "verificado": bool(v["verificado"]),
+            "registro": {"tipo": "TXT", "nombre": f"_minisoc-verify.{dom}", "valor": VERIFY_PREFIX + v["token"]},
+            "instrucciones": f"Publica el TXT y llama a POST /verify/{dom}/check. Cubre también sus subdominios."}
+
+
+@app.post("/verify/{dominio}/check")
+def verify_comprobar(dominio: str, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    dom = scanners.dominio_de(dominio)
+    v = store.get_or_create_token(dom)
+    esperado = VERIFY_PREFIX + v["token"]
+    try:
+        txts = [b"".join(r.strings).decode(errors="replace")
+                for r in dns.resolver.resolve(f"_minisoc-verify.{dom}", "TXT", lifetime=6.0)]
+    except Exception:
+        txts = []
+    ok = esperado in txts
+    if ok:
+        store.mark_verified(dom)
+    audit(request, ident, "verify-check", dom, "ok" if ok else "no encontrado")
+    return {"dominio": dom, "verificado": ok or bool(v["verificado"]),
+            "detalle": "Token encontrado en DNS." if ok else f"No se encontró {esperado} en _minisoc-verify.{dom} (¿propagación DNS?)."}
+
+
+@app.get("/verify")
+def verify_listar(ident: Ident = Depends(require("activo"))) -> list[dict]:
+    return [{"dominio": v["dominio"], "verificado": v["verificado"], "creado": v["creado"]}
+            for v in store.list_verifications()]

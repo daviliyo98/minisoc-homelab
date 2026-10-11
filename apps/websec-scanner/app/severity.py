@@ -199,6 +199,23 @@ CATALOG.update({
 })
 
 
+# --- Catálogo de checks web añadidos (HTML, CORS) ---
+CATALOG.update({
+    "cors-wildcard-credentials": _c(5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N", "CWE-942", "A05:2021 — Security Misconfiguration"),
+    "mixed-content-active":   _c(4.8, "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N", "CWE-319", "A02:2021 — Cryptographic Failures"),
+    "mixed-content-passive":  _c(2.6, "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N", "CWE-319", "A02:2021 — Cryptographic Failures"),
+    "no-sri":                 _c(2.6, "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:L/A:N", "CWE-353", "A08:2021 — Software and Data Integrity Failures"),
+})
+
+# --- Catálogo RECON (exposición: subdominios, puertos, takeover) ---
+CATALOG.update({
+    "recon-takeover":         _c(8.2, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:N", "CWE-284", "A05:2021 — Security Misconfiguration", "recon"),
+    "recon-dangling-cname":   _c(5.3, "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N", "CWE-284", "A05:2021 — Security Misconfiguration", "recon"),
+    "recon-sensitive-ports":  _c(5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N", "CWE-668", "A05:2021 — Security Misconfiguration", "recon"),
+    "recon-open-ports":       _c(0.0, "—", "CWE-668", "Superficie de exposición / inventario", "recon"),
+    "recon-known-cves":       _c(6.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N", "CWE-1104", "A06:2021 — Vulnerable and Outdated Components", "recon"),
+})
+
 def enrich(findings: list[dict], servicio: str = "web") -> list[dict]:
     """Enriquece cada hallazgo con CVSS v3.1, tramo, CWE, OWASP y servicio.
 

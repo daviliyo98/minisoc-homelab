@@ -20,6 +20,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
     unzip -o /tmp/nuclei.zip -d /usr/local/bin nuclei && chmod +x /usr/local/bin/nuclei && rm /tmp/nuclei.zip && \
     apt-get purge -y unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
+# --- testssl.sh (análisis TLS a fondo; vendorizado en ./testssl.sh) ---
+# Necesita bash, openssl (ya viene con ca-certificates), hexdump, ps y dig.
+RUN apt-get update && apt-get install -y --no-install-recommends bsdextrautils procps dnsutils && \
+    rm -rf /var/lib/apt/lists/*
+COPY testssl.sh/testssl.sh /opt/testssl/testssl.sh
+COPY testssl.sh/etc /opt/testssl/etc
+RUN chmod +x /opt/testssl/testssl.sh
+
+# Base de datos (historial, activos, auditoría): volumen montado en /data.
+RUN mkdir -p /data && chown scanner:scanner /data
+
 COPY app ./app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

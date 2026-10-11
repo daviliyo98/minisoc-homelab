@@ -52,6 +52,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 | [HL-005](docs/hallazgos/HL-005-crowdsec-sin-logs-ssh.md) | Sistema de detección activo pero sin visibilidad de los logs de SSH | Alta | Remediado |
 | [HL-006](docs/hallazgos/HL-006-contenedor-sin-salida-ipv6.md) | Contenedor sin salida de red por preferencia de IPv6 | Media | Resuelto |
 | [HL-007](docs/hallazgos/HL-007-falso-positivo-securitytxt.md) | Falso positivo en la detección de security.txt (soft-404) | Media | Resuelto |
+| [HL-008](docs/hallazgos/HL-008-grafana-provisioning-sin-permisos.md) | Grafana sin acceso a su carpeta de provisioning (permisos 700) | Media | Resuelto |
 
 ## Runbooks
 

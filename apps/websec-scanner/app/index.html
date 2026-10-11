@@ -69,6 +69,14 @@
   .chk .nm{flex:1}
   .chk .dt{color:var(--muted);font-size:.8rem;font-family:ui-monospace,Menlo,Consolas,monospace}
   .st-ok{color:var(--ok)} .st-falta{color:var(--alta)} .st-aviso{color:var(--media)} .st-info{color:var(--muted)}
+  .rbar{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}
+  .rbar button,.mini{margin:0;width:auto;padding:6px 11px;font-size:.8rem;background:var(--panel2);
+    border:1px solid var(--border);color:var(--text);border-radius:7px;font-weight:600}
+  .mini.danger{color:var(--alta)}
+  table.hist{width:100%;border-collapse:collapse;font-size:.84rem}
+  table.hist td,table.hist th{padding:7px 6px;border-top:1px solid var(--border);text-align:left;vertical-align:middle}
+  table.hist th{color:var(--muted);font-weight:600;border-top:0}
+  .tabs{flex-wrap:wrap} .tab{min-width:90px}
   .foot{color:var(--muted);font-size:.78rem;text-align:center;margin-top:28px}
 </style>
 </head>
@@ -85,6 +93,10 @@
     <button class="tab" data-tab="dns">🧭 DNS</button>
     <button class="tab" data-tab="activo">⚡ Activo</button>
     <button class="tab" data-tab="zap">🕷️ ZAP</button>
+    <button class="tab" data-tab="recon">🛰️ Recon</button>
+    <button class="tab" data-tab="full">🧩 Completo</button>
+    <button class="tab" data-tab="tls">🔐 TLS a fondo</button>
+    <button class="tab" data-tab="hist">📜 Historial</button>
   </div>
 
   <div class="card">
@@ -136,19 +148,23 @@ document.querySelectorAll(".tab").forEach(b=>{
   b.addEventListener("click", ()=>{
     tab = b.dataset.tab;
     document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
-    const needsUrl = (tab==="web" || tab==="activo" || tab==="zap");
-    const needsDomain = (tab==="mail" || tab==="dns");
-    const needsAuthz = (tab==="activo" || tab==="zap");
+    const needsUrl = ["web","activo","zap","full","tls"].includes(tab);
+    const needsDomain = (tab==="mail" || tab==="dns" || tab==="recon");
+    const needsAuthz = (tab==="activo" || tab==="zap" || tab==="tls");
     $("#url-group").classList.toggle("hidden", !needsUrl);
     $("#domain-group").classList.toggle("hidden", !needsDomain);
     $("#authz-group").classList.toggle("hidden", !needsAuthz);
     $("#zap-opts").classList.toggle("hidden", tab!=="zap");
-    $("#go").textContent = tab==="mail" ? "Analizar correo"
-      : (tab==="dns" ? "Analizar DNS"
-      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web")));
+    $("#go").textContent = goLabel();
     $("#result").classList.add("hidden");
+    if(tab==="hist") loadHist();
   });
 });
+function goLabel(){
+  return ({mail:"Analizar correo", dns:"Analizar DNS", activo:"Escanear (activo)", zap:"Escanear con ZAP",
+           recon:"Descubrir superficie expuesta", full:"Análisis completo (web + correo + DNS)",
+           tls:"Analizar TLS a fondo (testssl.sh)", hist:"Actualizar historial"})[tab] || "Analizar web";
+}
 
 function sumFindings(h){ return h.map(f=>{
   const score = (f.cvss_score!=null) ? Number(f.cvss_score).toFixed(1) : null;
@@ -181,7 +197,7 @@ function scoreHead(d){
   return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
     '<div><div style="font-weight:600">'+esc(d.objetivo)+'</div>'+
     '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas'+
-    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+cmax+'</div>'+pago+'</div></div>';
+    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+cmax+'</div>'+pago+'</div></div>'+reportBar(d.scan_id);
 }
 
 // Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
@@ -207,7 +223,8 @@ async function pollActive(jobId, key){
     }catch(e){ box.innerHTML='<p class="err">Se perdió la conexión con la API.</p>'; return; }
     if(!r.ok){ box.innerHTML='<p class="err">Error '+r.status+': '+((data&&data.detail)||"fallo")+'</p>'; return; }
     if(data.status==="running"){
-      box.innerHTML='<span class="meta">🕷️ Escaneando '+esc(data.objetivo||"")+'… ('+secs+'s)</span>'+logBox(data.log);
+      box.innerHTML='<span class="meta">🕷️ '+(data.estado_real==="queued"?"En cola":"Escaneando")+' '+esc(data.objetivo||"")+'… ('+secs+'s)</span> '+
+        '<button class="mini danger" onclick="cancelJob(\''+jobId+'\')">Cancelar</button>'+logBox(data.log);
       continue;
     }
     if(data.status==="error"){
@@ -220,11 +237,12 @@ async function pollActive(jobId, key){
 }
 
 async function run(){
+  if(tab==="hist"){ loadHist(); return; }
   const key = $("#key").value.trim();
   const box = $("#result");
-  const target = (tab==="mail"||tab==="dns") ? $("#domain").value.trim() : $("#url").value.trim();
+  const target = (tab==="mail"||tab==="dns"||tab==="recon") ? $("#domain").value.trim() : $("#url").value.trim();
   if(!target) return;
-  const esSegundoPlano = (tab==="activo" || tab==="zap");
+  const esSegundoPlano = (tab==="activo" || tab==="zap" || tab==="tls");
   if(esSegundoPlano && !$("#authz").checked){ alert("Marca la casilla de autorización para escanear este objetivo."); return; }
   try { localStorage.setItem("websec_key", key); } catch(e){}
 
@@ -236,6 +254,9 @@ async function run(){
   if(tab==="web"){ endpoint="/scan"; payload={url: target}; }
   else if(tab==="mail"){ endpoint="/scan-mail"; payload={domain: target}; }
   else if(tab==="dns"){ endpoint="/scan-dns"; payload={domain: target}; }
+  else if(tab==="recon"){ endpoint="/scan-recon"; payload={domain: target}; }
+  else if(tab==="full"){ endpoint="/scan-full"; payload={url: target}; }
+  else if(tab==="tls"){ endpoint="/scan-tls"; payload={url: target, autorizo: $("#authz").checked}; }
   else if(tab==="activo"){ endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
   else { endpoint="/scan-zap"; payload={url: target, autorizo: $("#authz").checked, activo: $("#zap-activo").checked}; }
   try{
@@ -254,14 +275,14 @@ async function run(){
     if(tab==="web") renderWeb(data);
     else if(tab==="mail") renderMail(data);
     else if(tab==="dns") renderDns(data);
-    else { pollActive(data.job_id, key); return; }   // activo/zap: trabajo en 2º plano
+    else if(tab==="recon") renderRecon(data);
+    else if(tab==="full") renderFull(data);
+    else { pollActive(data.job_id, key); return; }   // activo/zap/tls: trabajo en 2º plano
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
     $("#go").disabled = false;
-    $("#go").textContent = tab==="mail" ? "Analizar correo"
-      : (tab==="dns" ? "Analizar DNS"
-      : (tab==="activo" ? "Escanear (activo)" : (tab==="zap" ? "Escanear con ZAP" : "Analizar web")));
+    $("#go").textContent = goLabel();
   }
 }
 
@@ -336,7 +357,7 @@ function renderActive(d){
 
 function renderDns(d){
   let h = scoreHead({objetivo:d.dominio, puntuacion:d.puntuacion, resumen:d.resumen,
-                     cvss_max:d.cvss_max, pago_por_hallazgo:d.pago_por_hallazgo});
+                     cvss_max:d.cvss_max, pago_por_hallazgo:d.pago_por_hallazgo, scan_id:d.scan_id});
   const R = d.registros || {};
   const filas = [];
   const push = (k, arr) => { (arr||[]).forEach(v => filas.push([k, v])); };
@@ -355,6 +376,109 @@ function renderDns(d){
   $("#result").innerHTML = h;
 }
 
+
+// --- Informes, historial, recon y análisis completo ---
+const key = () => $("#key").value.trim();
+function reportBar(id){
+  if(!id) return "";
+  return '<div class="rbar">'+
+    '<button onclick="openReport(\''+id+'\',\'html\')">📄 Informe HTML / PDF</button>'+
+    '<button onclick="openReport(\''+id+'\',\'md\')">⬇ Markdown</button>'+
+    '<button onclick="openReport(\''+id+'\',\'sarif\')">⬇ SARIF</button>'+
+    '<button onclick="openReport(\''+id+'\',\'json\')">⬇ JSON</button>'+
+    '<button onclick="showDiff(\''+id+'\')">↔ Comparar con el anterior</button></div><div id="diff-'+id+'"></div>';
+}
+// La clave va en cabecera (nunca en la URL): se descarga con fetch y se abre como blob.
+async function openReport(id, fmt){
+  const r = await fetch("/scans/"+id+"/report?format="+fmt, {headers:{"x-api-key":key()}});
+  if(!r.ok){ alert("Error "+r.status+" al generar el informe"); return; }
+  const blob = await r.blob(), url = URL.createObjectURL(blob);
+  if(fmt==="html"){ window.open(url, "_blank"); return; }
+  const a = document.createElement("a"); a.href = url;
+  a.download = "informe-"+id.slice(0,8)+"."+fmt; document.body.appendChild(a); a.click(); a.remove();
+}
+async function showDiff(id){
+  const box = document.getElementById("diff-"+id);
+  const r = await fetch("/scans/"+id+"/diff", {headers:{"x-api-key":key()}});
+  const d = await r.json();
+  if(!r.ok){ box.innerHTML='<p class="meta">'+esc(d.detail||"Sin escaneo anterior")+'</p>'; return; }
+  const li = (arr, sym) => arr.map(f=>'<div class="chk"><span class="st">'+sym+'</span><span class="nm">'+esc(f.titulo)+'</span><span class="dt">'+esc(f.cvss_score)+'</span></div>').join("");
+  box.innerHTML = '<div class="sectitle">Cambios desde el '+new Date(d.fecha_anterior*1000).toLocaleString()+'</div>'+
+    '<div class="meta">Puntuación '+esc(d.puntuacion.antes)+' → <b>'+esc(d.puntuacion.ahora)+'</b> · '+
+    d.nuevos.length+' nuevos · '+d.corregidos.length+' corregidos · '+d.persisten+' persisten</div>'+
+    ((d.nuevos.length||d.corregidos.length) ? '<div class="checks" style="margin-top:8px">'+li(d.nuevos,"🆕")+li(d.corregidos,"✅")+'</div>' : '');
+}
+async function cancelJob(id){
+  await fetch("/scans/"+id, {method:"DELETE", headers:{"x-api-key":key()}});
+}
+const fecha = ts => ts ? new Date(ts*1000).toLocaleString() : "—";
+async function loadHist(){
+  const box = $("#result"); box.classList.remove("hidden");
+  try { localStorage.setItem("websec_key", key()); } catch(e){}
+  box.innerHTML = '<span class="meta">Cargando historial…</span>';
+  const [rs, ra] = await Promise.all([
+    fetch("/scans?limit=60", {headers:{"x-api-key":key()}}),
+    fetch("/assets", {headers:{"x-api-key":key()}})]);
+  if(!rs.ok){ box.innerHTML='<p class="err">Error '+rs.status+' (¿clave correcta?)</p>'; return; }
+  const scans = await rs.json(), assets = ra.ok ? await ra.json() : [];
+  let h = '<div class="sectitle" style="margin-top:0">Activos monitorizados</div>';
+  if(assets.length){
+    h += '<table class="hist"><tr><th>Objetivo</th><th>Tipo</th><th>Cada</th><th>Último</th><th>Nota</th><th></th></tr>'+
+      assets.map(a=>'<tr><td>'+esc(a.objetivo)+'</td><td>'+esc(a.tipo)+'</td><td>'+a.intervalo_h+' h</td><td>'+fecha(a.ultimo)+'</td>'+
+        '<td>'+(a.puntuacion!=null?'<b style="color:'+scoreColor(a.puntuacion)+'">'+a.puntuacion+'</b>':'—')+'</td>'+
+        '<td><button class="mini" onclick="assetRun(\''+a.id+'\')">▶</button> <button class="mini danger" onclick="assetDel(\''+a.id+'\')">✕</button></td></tr>').join("")+'</table>';
+  } else { h += '<p class="meta">Ninguno todavía.</p>'; }
+  h += '<div class="row" style="margin-top:10px"><div><input id="as-obj" placeholder="https://ejemplo.com o ejemplo.com"></div>'+
+       '<div style="flex:0 0 130px"><select id="as-tipo" style="width:100%;padding:11px;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px">'+
+       '<option value="full">completo</option><option value="web">web</option><option value="correo">correo</option><option value="dns">dns</option><option value="recon">recon</option></select></div>'+
+       '<div style="flex:0 0 110px"><input id="as-int" type="number" value="24" min="1" title="horas"></div></div>'+
+       '<button class="mini" style="margin-top:8px" onclick="assetAdd()">+ Monitorizar (requiere clave admin)</button>';
+  h += '<div class="sectitle">Últimos escaneos</div>';
+  h += '<table class="hist"><tr><th>Fecha</th><th>Tipo</th><th>Objetivo</th><th>Estado</th><th>Nota</th><th>CVSS</th><th></th></tr>'+
+    scans.map(s=>'<tr><td>'+fecha(s.started)+'</td><td>'+esc(s.tipo)+'</td><td style="word-break:break-all">'+esc(s.objetivo)+'</td>'+
+      '<td>'+esc(s.status)+'</td><td>'+(s.puntuacion!=null?'<b style="color:'+scoreColor(s.puntuacion)+'">'+s.puntuacion+'</b>':'—')+'</td>'+
+      '<td>'+(s.cvss_max!=null?Number(s.cvss_max).toFixed(1):'—')+'</td>'+
+      '<td>'+(s.status==="done"?'<button class="mini" onclick="openReport(\''+s.id+'\',\'html\')">📄</button>':'')+'</td></tr>').join("")+'</table>';
+  box.innerHTML = h;
+}
+async function assetAdd(){
+  const r = await fetch("/assets", {method:"POST", headers:{"content-type":"application/json","x-api-key":key()},
+    body: JSON.stringify({objetivo:$("#as-obj").value.trim(), tipo:$("#as-tipo").value, intervalo_h:Number($("#as-int").value)||24})});
+  if(!r.ok){ const d = await r.json(); alert("Error "+r.status+": "+(typeof d.detail==="string"?d.detail:JSON.stringify(d.detail))); }
+  loadHist();
+}
+async function assetDel(id){ if(confirm("¿Dejar de monitorizar este activo?")){ await fetch("/assets/"+id,{method:"DELETE",headers:{"x-api-key":key()}}); loadHist(); } }
+async function assetRun(id){ await fetch("/assets/"+id+"/run",{method:"POST",headers:{"x-api-key":key()}}); alert("Escaneo lanzado; aparecerá en el historial en unos segundos."); }
+
+function renderRecon(d){
+  let h = scoreHead(d);
+  if((d.avisos||[]).length) h += '<p class="meta" style="color:var(--media)">'+d.avisos.map(esc).join("<br>")+'</p>';
+  const todos = d.hallazgos||[];
+  const fallos = todos.filter(f=>f.severidad!=="informativo"), infos = todos.filter(f=>f.severidad==="informativo");
+  h += fallos.length ? '<div class="sectitle">Hallazgos</div>'+sumFindings(fallos) : '<p style="color:var(--ok)">Sin takeovers ni servicios sensibles expuestos.</p>';
+  h += '<div class="sectitle">Subdominios ('+d.total_subdominios+(d.truncado?', truncado':'')+')</div><div class="checks" style="max-height:320px;overflow:auto">'+
+    (d.subdominios||[]).map(s=>'<div class="chk"><span class="nm" style="word-break:break-all">'+esc(s.host)+'</span>'+
+      '<span class="dt">'+esc(s.cname ? "→ "+s.cname : (s.ips||[]).join(", ") || (s.nxdomain?"NXDOMAIN":"—"))+'</span></div>').join("")+'</div>';
+  if(infos.length) h += '<div class="sectitle">Informativo</div>'+sumFindings(infos);
+  if(d.aviso) h += '<p class="meta" style="margin-top:12px">'+esc(d.aviso)+'</p>';
+  $("#result").innerHTML = h;
+}
+function renderFull(d){
+  let h = scoreHead(d);
+  const S = d.secciones||{}, nombres = {web:"🌐 Web", correo:"✉️ Correo", dns:"🧭 DNS"};
+  h += '<div class="checks">'+Object.keys(nombres).map(k=>{
+    const s = S[k];
+    return '<div class="chk"><span class="nm">'+nombres[k]+'</span><span class="dt">'+
+      (s ? 'nota <b style="color:'+scoreColor(s.puntuacion)+'">'+s.puntuacion+'</b> · CVSS máx '+Number(s.cvss_max||0).toFixed(1)+' · '+(s.hallazgos||[]).length+' hallazgos'
+         : '<span class="err">'+esc((d.errores||{})[k]||"error")+'</span>')+'</span></div>';
+  }).join("")+'</div>';
+  for(const k of Object.keys(nombres)){
+    const s = S[k];
+    if(s && (s.hallazgos||[]).length){ h += '<div class="sectitle">'+nombres[k]+'</div>'+sumFindings(s.hallazgos); }
+  }
+  if(d.aviso) h += '<p class="meta" style="margin-top:12px">'+esc(d.aviso)+'</p>';
+  $("#result").innerHTML = h;
+}
 $("#go").addEventListener("click", run);
 $("#url").addEventListener("keydown", e=>{ if(e.key==="Enter") run(); });
 $("#domain").addEventListener("keydown", e=>{ if(e.key==="Enter") run(); });

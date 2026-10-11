@@ -1,0 +1,9 @@
+tests/
+pytest.ini
+requirements-dev.txt
+.env
+testssl.sh/t/
+testssl.sh/doc/
+testssl.sh/utils/
+testssl.sh/bin/
+**/__pycache__
