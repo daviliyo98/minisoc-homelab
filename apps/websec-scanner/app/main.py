@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 
-from . import activescan, checks, dnsrecon, mailcheck, zapscan
+from . import activescan, checks, dnsrecon, mailcheck, severity, zapscan
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
 _INDEX = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
@@ -98,6 +98,11 @@ def scan_dns(req: DnsScanRequest, x_api_key: str | None = Header(default=None)) 
     res = dnsrecon.scan(req.domain)
     if res.get("error"):
         raise HTTPException(400, res["error"])
+    severity.enrich(res["hallazgos"], "dns")
+    res["hallazgos"].sort(key=lambda f: -(f.get("cvss_score") or 0.0))
+    res["resumen"] = severity.resumen(res["hallazgos"])
+    res["cvss_max"] = severity.cvss_max(res["hallazgos"])
+    res["pago_por_hallazgo"] = severity.pago_por_hallazgo(res["hallazgos"])
     return res
 
 
@@ -109,7 +114,13 @@ def scan_mail(req: MailScanRequest, x_api_key: str | None = Header(default=None)
     Endpoint síncrono: dns.resolver es bloqueante y FastAPI lo ejecuta en un hilo.
     """
     _auth(x_api_key)
-    return mailcheck.scan(req.domain)
+    res = mailcheck.scan(req.domain)
+    severity.enrich(res["hallazgos"], "correo")
+    res["hallazgos"].sort(key=lambda f: -(f.get("cvss_score") or 0.0))
+    res["resumen"] = severity.resumen(res["hallazgos"])
+    res["cvss_max"] = severity.cvss_max(res["hallazgos"])
+    res["pago_por_hallazgo"] = severity.pago_por_hallazgo(res["hallazgos"])
+    return res
 
 
 @app.post("/scan")
@@ -147,10 +158,14 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
 
     todos = (http_res["findings"] + tls_res.get("findings", [])
              + caa["findings"] + redir["findings"])
-    orden = {"alta": 0, "media": 1, "baja": 2}
-    todos.sort(key=lambda f: orden.get(f["severidad"], 9))
+    # Enriquecer con CVSS v3.1: asigna vector/puntuación/tramo/CWE/OWASP y
+    # recalcula `severidad` de forma coherente (corrige severidades infladas,
+    # p. ej. la ausencia de CSP/HSTS deja de ser "alta").
+    todos = severity.enrich(todos, "web")
+    todos.sort(key=lambda f: -(f.get("cvss_score") or 0.0))  # lo más grave primero
 
-    # Puntuación simple: 100 menos penalización por hallazgo
+    # Puntuación 0–100 heredada (la UI aún la muestra), recalculada con las
+    # severidades ya corregidas por CVSS.
     pen = {"alta": 20, "media": 8, "baja": 3}
     nota = max(0, 100 - sum(pen.get(f["severidad"], 0) for f in todos))
 
@@ -182,12 +197,10 @@ async def scan(req: ScanRequest, x_api_key: str | None = Header(default=None)) -
     return {
         "objetivo": http_res["url_final"],
         "puntuacion": nota,
+        "cvss_max": severity.cvss_max(todos),
         "comprobaciones": comprobaciones,
-        "resumen": {
-            "altas": sum(1 for f in todos if f["severidad"] == "alta"),
-            "medias": sum(1 for f in todos if f["severidad"] == "media"),
-            "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
-        },
+        "resumen": severity.resumen(todos),
+        "pago_por_hallazgo": severity.pago_por_hallazgo(todos),
         "tls": {k: v for k, v in tls_res.items() if k != "findings"},
         "security_txt": sectxt,
         "caa": caa.get("caa"),
@@ -234,15 +247,15 @@ def _finalizar_job(job_id: str, res: dict, *, modo: str, motor: str, url: str, a
             job["error"] = res.get("error", "No se pudo ejecutar el escaneo.")
             return
         todos = res["findings"]
+        severity.enrich(todos, "activo" if motor == "nuclei" else "zap")
+        todos.sort(key=lambda f: -(f.get("cvss_score") or 0.0))
         job["status"] = "done"
         job["result"] = {
-            "objetivo": url, "modo": modo, "motor": motor, "puntuacion": _puntuar(todos),
-            "resumen": {
-                "altas": sum(1 for f in todos if f["severidad"] == "alta"),
-                "medias": sum(1 for f in todos if f["severidad"] == "media"),
-                "bajas": sum(1 for f in todos if f["severidad"] == "baja"),
-                "informativos": sum(1 for f in todos if f["severidad"] == "informativo"),
-            },
+            "objetivo": url, "modo": modo, "motor": motor,
+            "puntuacion": _puntuar(todos),
+            "cvss_max": severity.cvss_max(todos),
+            "resumen": severity.resumen(todos),
+            "pago_por_hallazgo": severity.pago_por_hallazgo(todos),
             "hallazgos": todos,
             "aviso": aviso,
         }

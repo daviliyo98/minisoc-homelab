@@ -53,6 +53,8 @@
   .finding .detail{color:var(--muted);font-size:.85rem;margin-top:2px}
   .finding .fix{font-size:.82rem;margin-top:5px}
   .finding .fix b{color:var(--ok)}
+  .finding .cvssline{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.73rem;
+    color:var(--muted);margin-top:4px;word-break:break-word}
   .err{color:var(--alta);font-weight:600}
   .sectxt{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
           padding:12px 14px;margin:10px 0 16px;white-space:pre-wrap;word-break:break-word;
@@ -148,11 +150,20 @@ document.querySelectorAll(".tab").forEach(b=>{
   });
 });
 
-function sumFindings(h){ return h.map(f=>
-  '<div class="finding"><span class="badge '+sevClass(f.severidad)+'">'+f.severidad+'</span>'+
-  '<div class="body"><div class="title">'+f.titulo+'</div>'+
-  '<div class="detail">'+f.detalle+'</div>'+
-  '<div class="fix"><b>Solución:</b> '+f.remediacion+'</div></div></div>').join("");
+function sumFindings(h){ return h.map(f=>{
+  const score = (f.cvss_score!=null) ? Number(f.cvss_score).toFixed(1) : null;
+  const tierLbl = f.severidad_cvss_label || f.severidad;
+  const badge = '<span class="badge '+sevClass(f.severidad)+'">'+esc(tierLbl)+(score!=null?' · '+score:'')+'</span>';
+  const bits = [];
+  if(f.cvss && f.cvss!=='—') bits.push('CVSS '+esc(f.cvss));
+  if(f.cwe && f.cwe!=='—') bits.push(esc(f.cwe));
+  if(f.owasp) bits.push(esc(f.owasp));
+  const tech = bits.length ? '<div class="cvssline">'+bits.join(' · ')+'</div>' : '';
+  return '<div class="finding">'+badge+
+    '<div class="body"><div class="title">'+esc(f.titulo)+'</div>'+
+    '<div class="detail">'+esc(f.detalle)+'</div>'+tech+
+    '<div class="fix"><b>Solución:</b> '+esc(f.remediacion)+'</div></div></div>';
+}).join("");
 }
 const stSym = e => ({ok:"✓",falta:"✗",aviso:"◐",info:"·"}[e] || "·");
 function sumChecks(list){
@@ -163,10 +174,14 @@ function sumChecks(list){
     '</div>';
 }
 function scoreHead(d){
+  const cmax = (d.cvss_max!=null) ? ' · CVSS máx <b>'+Number(d.cvss_max).toFixed(1)+'</b>' : '';
+  const p = d.pago_por_hallazgo;
+  const pago = p ? '<div class="meta" style="margin-top:3px">Facturables (pago por hallazgo): <b>'+p.facturables+'</b>'+
+    ' — C'+p.criticas+' · A'+p.altas+' · M'+p.medias+' · B'+p.bajas+(p.info?' · info '+p.info:'')+'</div>' : '';
   return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
-    '<div><div style="font-weight:600">'+d.objetivo+'</div>'+
+    '<div><div style="font-weight:600">'+esc(d.objetivo)+'</div>'+
     '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas'+
-    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+'</div></div></div>';
+    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+cmax+'</div>'+pago+'</div></div>';
 }
 
 // Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
@@ -320,7 +335,8 @@ function renderActive(d){
 }
 
 function renderDns(d){
-  let h = scoreHead({objetivo:d.dominio, puntuacion:d.puntuacion, resumen:d.resumen});
+  let h = scoreHead({objetivo:d.dominio, puntuacion:d.puntuacion, resumen:d.resumen,
+                     cvss_max:d.cvss_max, pago_por_hallazgo:d.pago_por_hallazgo});
   const R = d.registros || {};
   const filas = [];
   const push = (k, arr) => { (arr||[]).forEach(v => filas.push([k, v])); };
