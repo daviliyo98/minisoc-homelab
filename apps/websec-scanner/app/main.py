@@ -24,7 +24,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
-from . import activescan, checks, jobs, monitor, report, scanners, store, tlsdeep, zapscan
+from . import activescan, checks, comboscan, jobs, monitor, reconweb, report, scanners, store, tarifas, tlsdeep, zapscan
 from .auth import Ident, audit, require
 
 # La interfaz web se carga una vez al arrancar (el contenedor es de solo lectura)
@@ -113,6 +113,7 @@ async def _ejecutar(request: Request, ident: Ident, tipo: str, objetivo: str, co
         store.fail_scan(sid, f"{type(e).__name__}: {e}")
         raise
     res["scan_id"] = sid
+    tarifas.aplicar(res, store.previous_scan(sid))
     store.finish_scan(sid, res)
     audit(request, ident, f"scan-{tipo}", objetivo, "ok")
     return res
@@ -165,6 +166,11 @@ async def scan_full(req: FullScanRequest, request: Request, ident: Ident = Depen
 # --------------------------------------------------------------------------- #
 class ActiveScanRequest(ScanRequest):
     autorizo: bool = False
+
+
+class ActiveFullRequest(ActiveScanRequest):
+    # Si True, ZAP hace inyección (SQLi/XSS…); requiere ACTIVE_SCAN_ENABLED=1.
+    inyeccion: bool = False
 
 
 class ZapScanRequest(ActiveScanRequest):
@@ -261,6 +267,61 @@ def scan_zap(req: ZapScanRequest, request: Request, ident: Ident = Depends(requi
     return {"job_id": sid, "status": "queued", "objetivo": url, "modo": modo}
 
 
+@app.post("/scan-webrecon")
+def scan_webrecon(req: ActiveScanRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Reconocimiento web ACTIVO-LIGERO (solo lectura: GET/HEAD a rutas del sitio).
+
+    Detecta ficheros sensibles (.git/.env/backups), security.txt y, si hay
+    WordPress, versión/plugins, enumeración de usuarios, XML-RPC y wp-login.
+    Candados: rol 'activo' · autorizo=true · anti-SSRF · dominio verificado (si se exige).
+    No inyecta cargas. Estado en GET /scan-status/{job_id}.
+    """
+    _candados(req, request, ident, "scan-webrecon")
+    url = req.url
+
+    def trabajo(sid: str, cancel: threading.Event) -> dict:
+        jobs.log(sid, "Reconocimiento web activo-ligero: ficheros, security.txt y WordPress")
+        return reconweb.scan(url, log=lambda m: jobs.log(sid, m))
+
+    sid = jobs.lanzar("webrecon", url, ident.nombre, trabajo, motor="webrecon",
+                      aviso="Reconocimiento web activo-ligero (solo lectura: GET/HEAD a rutas del sitio). "
+                            "Ejecútelo SOLO sobre sistemas propios o con autorización por escrito.")
+    audit(request, ident, "scan-webrecon", url, f"job {sid}")
+    return {"job_id": sid, "status": "queued", "objetivo": url}
+
+
+@app.post("/scan-activo")
+def scan_activo_combo(req: ActiveFullRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
+    """Análisis ACTIVO unificado en una sola acción (en segundo plano).
+
+    Contempla el último análisis pasivo del objetivo y añade recon web + TLS a
+    fondo + Nuclei (si está habilitado) + ZAP (si está habilitado), fusionando y
+    deduplicando los hallazgos en un único informe profesional.
+    Candados: rol 'activo' · autorizo=true · anti-SSRF · dominio verificado (si se exige).
+    `inyeccion=true` (ZAP activo) requiere además ACTIVE_SCAN_ENABLED=1.
+    """
+    _candados(req, request, ident, "scan-activo")
+    if req.inyeccion and not ACTIVE_ENABLED:
+        raise HTTPException(403, "La inyección (ZAP activo) requiere ACTIVE_SCAN_ENABLED=1 en el servidor.")
+    url = req.url
+    dom = scanners.dominio_de(url)
+
+    def trabajo(sid: str, cancel: threading.Event) -> dict:
+        jobs.log(sid, "Análisis ACTIVO unificado: pasivo previo + recon web + TLS + Nuclei + ZAP")
+        return comboscan.scan_activo(
+            url, objetivo=dom, con_inyeccion=req.inyeccion,
+            active_enabled=ACTIVE_ENABLED, zap_enabled=ZAP_ENABLED,
+            zap_base=ZAP_BASE, zap_api_key=ZAP_API_KEY, es_publico=checks.es_publico,
+            log=lambda m: jobs.log(sid, m), cancel=cancel)
+
+    motores = ["recon web", "TLS"] + (["Nuclei"] if ACTIVE_ENABLED else []) + (["ZAP"] if ZAP_ENABLED else [])
+    sid = jobs.lanzar("activo", url, ident.nombre, trabajo, motor="combo",
+                      aviso="Análisis ACTIVO: envía peticiones reales al objetivo (" + ", ".join(motores) +
+                            "). Ejecútelo SOLO sobre sistemas propios o con autorización por escrito.")
+    audit(request, ident, "scan-activo", url, f"job {sid}")
+    return {"job_id": sid, "status": "queued", "objetivo": url}
+
+
 @app.post("/scan-tls")
 def scan_tls(req: ActiveScanRequest, request: Request, ident: Ident = Depends(require("activo"))) -> dict:
     """Análisis TLS a fondo con testssl.sh (protocolos, cifrados, cadena, Heartbleed, ROBOT…), en segundo plano."""
@@ -352,9 +413,12 @@ def scan_diff(sid: str, contra: str | None = None, ident: Ident = Depends(requir
 
 
 @app.get("/scans/{sid}/report")
-def scan_report(sid: str, format: Literal["html", "md", "json", "sarif"] = "html",
+def scan_report(sid: str, format: Literal["html", "md", "json", "sarif"] = "html", precios: bool = False,
                 ident: Ident = Depends(require("pasivo"))):
-    """Informe descargable. HTML (imprimible a PDF), Markdown, JSON o SARIF 2.1.0."""
+    """Informe descargable. HTML (imprimible a PDF), Markdown, JSON o SARIF 2.1.0.
+
+    `precios=1` añade la estimación de pago por hallazgo (html/md); por defecto no se incluye.
+    """
     s = _scan_o_404(sid)
     if s["status"] != "done":
         raise HTTPException(409, f"El escaneo no ha terminado (estado: {s['status']}).")
@@ -362,9 +426,9 @@ def scan_report(sid: str, format: Literal["html", "md", "json", "sarif"] = "html
     cambios = report.diff(previo["result"], s["result"]) if previo else None
     nombre = f"informe-{scanners.dominio_de(s['objetivo']) or 'objetivo'}-{sid[:8]}"
     if format == "html":
-        return HTMLResponse(report.render_html(s, cambios))
+        return HTMLResponse(report.render_html(s, cambios, precios))
     if format == "md":
-        cuerpo, mime, ext = report.render_md(s, cambios), "text/markdown; charset=utf-8", "md"
+        cuerpo, mime, ext = report.render_md(s, cambios, precios), "text/markdown; charset=utf-8", "md"
     elif format == "sarif":
         cuerpo, mime, ext = report.render_sarif(s), "application/sarif+json", "sarif"
     else:

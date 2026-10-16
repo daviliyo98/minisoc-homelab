@@ -173,16 +173,38 @@ async def run_full(url: str, dominio: str | None = None) -> dict:
     """Web + correo + DNS en paralelo, con puntuación y CVSS globales."""
     url = normalizar_url(url)
     dom = dominio_de(dominio or url)
-    web, mail, dnsr = await asyncio.gather(
+    web, mail, dnsr, rec = await asyncio.gather(
         run_web(url), asyncio.to_thread(run_mail, dom), asyncio.to_thread(run_dns, dom),
+        asyncio.to_thread(run_recon, dom),
         return_exceptions=True)
     secciones, errores = {}, {}
-    for nombre, r in (("web", web), ("correo", mail), ("dns", dnsr)):
+    for nombre, r in (("web", web), ("correo", mail), ("dns", dnsr), ("recon", rec)):
         if isinstance(r, Exception):
             secciones[nombre] = None
             errores[nombre] = r.mensaje if isinstance(r, ScanError) else f"{type(r).__name__}: {r}"
         else:
             secciones[nombre] = r
+    # Un problema que detectan dos módulos (SPF, DNSSEC, CAA) se queda solo en una sección:
+    # la preferida si esa sección lo trae; si no (p. ej. falló), en la primera que lo tenga.
+    donde: dict[str, str] = {}
+    for nombre, s in secciones.items():
+        for f in (s or {}).get("hallazgos", []):
+            k = severity.identidad(f)
+            if k not in donde or severity.SECCION_PREFERIDA.get(k) == nombre:
+                donde[k] = nombre
+    for nombre, s in secciones.items():
+        if not s:
+            continue
+        propios, vistos = [], set()
+        for f in s["hallazgos"]:
+            k = severity.identidad(f)
+            if donde[k] == nombre and k not in vistos:
+                vistos.add(k)
+                propios.append(f)
+        s["hallazgos"] = propios
+        s["resumen"] = severity.resumen(s["hallazgos"])
+        s["cvss_max"] = severity.cvss_max(s["hallazgos"])
+        s["pago_por_hallazgo"] = severity.pago_por_hallazgo(s["hallazgos"])
     validas = [s for s in secciones.values() if s]
     if not validas:
         raise ScanError(502, "Ningún análisis pudo completarse: " + "; ".join(f"{k}: {v}" for k, v in errores.items()))

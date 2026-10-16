@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Callable
 
-from . import severity, store
+from . import severity, store, tarifas
 
 MAX_CONCURRENT = max(1, int(os.environ.get("JOBS_MAX_CONCURRENT", "1") or 1))
 _SEM = threading.BoundedSemaphore(MAX_CONCURRENT)
@@ -70,8 +70,9 @@ def lanzar(tipo: str, objetivo: str, usuario: str,
                 elif not res.get("ok"):
                     store.fail_scan(sid, res.get("error", "No se pudo ejecutar el escaneo."))
                 else:
-                    store.finish_scan(sid, resultado(res, objetivo=objetivo, modo=tipo, motor=motor,
-                                                      aviso=aviso, sid=sid))
+                    out = resultado(res, objetivo=objetivo, modo=tipo, motor=motor, aviso=aviso, sid=sid)
+                    tarifas.aplicar(out, store.previous_scan(sid))
+                    store.finish_scan(sid, out)
         finally:
             with _LOCK:
                 _CANCEL.pop(sid, None)
@@ -96,6 +97,8 @@ def resultado(res: dict, *, objetivo: str, modo: str, motor: str, aviso: str, si
     }
     if res.get("resumen_tls"):
         out["tls"] = res["resumen_tls"]
+    if res.get("tecnologia"):
+        out["tecnologia"] = res["tecnologia"]
     return out
 
 

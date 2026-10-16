@@ -9,6 +9,7 @@ Es, en esencia, lo mismo que ve un navegador al abrir la página.
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import socket
 import ssl
@@ -70,6 +71,21 @@ SECURITY_HEADERS = {
 # Cabeceras que revelan tecnología/versión (fuga de información)
 LEAKY_HEADERS = ["server", "x-powered-by", "x-aspnet-version", "x-generator"]
 
+# CDNs / proxies inversos que fijan su propio 'server' y no dejan cambiarlo (p. ej.
+# Cloudflare en el plan gratuito). Sin número de versión no revelan nada que no
+# se vea ya en el DNS, así que no se informan.
+CDN_SERVERS = {"cloudflare", "cloudfront", "amazons3", "akamaighost", "akamainetstorage",
+               "netlify", "vercel", "github.com", "gws", "esf", "gse", "sffe", "fastly",
+               "bunnycdn", "keycdn", "azure front door", "microsoft-azure-application-gateway",
+               "google frontend", "varnish", "ddos-guard", "sucuri/cloudproxy", "imperva"}
+
+
+def _cabecera_inocua(nombre: str, valor: str) -> bool:
+    """True si 'server' es solo el nombre de un CDN, sin versión."""
+    v = valor.strip().lower()
+    return nombre == "server" and not any(c.isdigit() for c in v) and (
+        v in CDN_SERVERS or v.split("-")[0] in CDN_SERVERS)
+
 
 def _normalize(url: str) -> str:
     if not urlparse(url).scheme:
@@ -128,7 +144,7 @@ async def check_http(url: str, timeout: float) -> dict:
 
     # Fugas de versión
     for h in LEAKY_HEADERS:
-        if h in headers and headers[h].strip():
+        if h in headers and headers[h].strip() and not _cabecera_inocua(h, headers[h]):
             findings.append({
                 "severidad": "baja",
                 "titulo": f"La cabecera {h} revela tecnología",
@@ -222,6 +238,28 @@ def _attrs(tag: str) -> dict[str, str]:
     return {m.group(1).lower(): (m.group(2) or m.group(3) or m.group(4) or "") for m in _ATTR_RE.finditer(tag)}
 
 
+# Terceros cuyos recursos son dinámicos o se autoactualizan por diseño y que NO
+# admiten Subresource Integrity (SRI): Google Fonts adapta el CSS al navegador,
+# y Google Tag Manager / gtag / Analytics son cargadores que cambian solos. Un
+# integrity fijo rompería la carga y el proveedor no publica hashes, así que
+# marcarlos sería un falso positivo. Ampliable con SRI_EXENTOS en el entorno.
+SIN_SRI_NO_APLICABLE = {
+    "fonts.googleapis.com",
+    "www.googletagmanager.com", "googletagmanager.com",
+    "www.google-analytics.com", "google-analytics.com", "ssl.google-analytics.com",
+    "www.googleadservices.com",
+}
+_SRI_EXENTOS_EXTRA = {
+    s.strip().lower() for s in os.getenv("SRI_EXENTOS", "").split(",") if s.strip()
+}
+
+
+def _sri_no_aplicable(host: str) -> bool:
+    host = (host or "").lower()
+    exentos = SIN_SRI_NO_APLICABLE | _SRI_EXENTOS_EXTRA
+    return any(host == e or host.endswith("." + e) for e in exentos)
+
+
 def analizar_html(html: str, url_pagina: str) -> list[dict]:
     """Contenido mixto y scripts externos sin SRI, a partir del HTML de la página."""
     findings: list[dict] = []
@@ -240,7 +278,7 @@ def analizar_html(html: str, url_pagina: str) -> list[dict]:
             h = (urlparse(destino if "//" in destino else "").hostname or "").lower()
             if destino.startswith("//"):
                 h = (urlparse("https:" + destino).hostname or "").lower()
-            if h and h != host_pagina and not a.get("integrity"):
+            if h and h != host_pagina and not a.get("integrity") and not _sri_no_aplicable(h):
                 sin_sri.add(h)
     if mixto_activo:
         findings.append({

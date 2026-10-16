@@ -43,7 +43,7 @@ Interfaz web: `http://192.168.1.20:8001/` · Documentación interactiva: `/docs`
 | `GET /scan-status/{id}` | pasivo | Estado de un trabajo en segundo plano (con log) |
 | `GET /scans` · `GET /scans/{id}` | pasivo | Historial (filtros `objetivo`, `tipo`, `asset_id`) |
 | `GET /scans/{id}/diff` | pasivo | Hallazgos nuevos / corregidos frente al escaneo anterior (o `?contra=<id>`) |
-| `GET /scans/{id}/report?format=` | pasivo | Informe `html` (imprimible a PDF), `md`, `json` o `sarif` |
+| `GET /scans/{id}/report?format=` | pasivo | Informe `html` (imprimible a PDF), `md`, `json` o `sarif`; `&precios=1` añade el presupuesto |
 | `DELETE /scans/{id}` | activo | Cancela un trabajo en curso/en cola, o borra un escaneo terminado |
 | `GET/POST/DELETE /assets` | admin* | Activos monitorizados (re-escaneo periódico y alertas) · *listar: pasivo |
 | `POST /assets/{id}/run` | admin | Fuerza el escaneo inmediato de un activo |
@@ -59,6 +59,24 @@ Interfaz web: `http://192.168.1.20:8001/` · Documentación interactiva: `/docs`
 al anterior (`pasivo` < `activo` < `admin`). La antigua `API_KEY` sigue funcionando como admin.
 Límite de `RATE_LIMIT_PER_MIN` peticiones por clave. Cada acción queda en la tabla de auditoría
 y en stdout como `AUDIT {json}` (apto para CrowdSec/Loki).
+
+## Pago por hallazgo
+
+Cada escaneo terminado lleva `presupuesto`: una estimación con las reglas que publica la web.
+
+| Concepto | Por defecto | Variable |
+|---|---:|---|
+| Cuota mínima (solo primer escaneo del objetivo) | 190 € | `PRECIO_CUOTA_MINIMA` |
+| Crítica (CVSS 9.0–10) | 250 € | `PRECIO_CRITICA` |
+| Alta (7.0–8.9) | 150 € | `PRECIO_ALTA` |
+| Media (4.0–6.9) | 75 € | `PRECIO_MEDIA` |
+| Baja (0.1–3.9) | 25 € | `PRECIO_BAJA` |
+| Info | 0 € | — |
+| Tope máximo por escaneo | 690 € | `PRECIO_TOPE` |
+
+Solo cuentan hallazgos únicos. En los re-escaneos del mismo objetivo y tipo solo se cobran los
+nuevos, sin cuota mínima. Es una estimación previa a la validación manual: en la factura solo
+entran los hallazgos confirmados. Importes sin IVA.
 
 ## Monitorización continua
 

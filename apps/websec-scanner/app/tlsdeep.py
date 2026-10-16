@@ -75,7 +75,7 @@ def scan_tls(host: str, ip: str, port: int = 443, *, timeout_total: float = 900.
     fatales = [e.get("finding", "") for e in datos if str(e.get("severity", "")).upper() == "FATAL"]
     if fatales:
         return {"ok": False, "error": "testssl.sh no completó el análisis: " + " | ".join(fatales[:2]), "findings": []}
-    return {"ok": True, "motor": "testssl", "findings": parse(datos), "resumen_tls": resumen(datos)}
+    return {"ok": True, "motor": "testssl", "findings": agrupar_tls(parse(datos)), "resumen_tls": resumen(datos)}
 
 
 def _id(e: dict) -> str:
@@ -107,6 +107,66 @@ def parse(datos: list[dict]) -> list[dict]:
             f["cwe"] = e["cwe"]
         findings.append(f)
     return findings
+
+
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+# Causas raíz: muchos identificadores de testssl son síntomas del MISMO problema de
+# configuración. Los agrupamos para no inflar el informe (ni la factura) con 7-8
+# "hallazgos" que en realidad son 2.
+_PROTO_OBSOLETO = {"sslv2", "sslv3", "tls1", "tls1_1", "beast", "beast_cbc_tls1", "poodle_ssl", "poodle"}
+_CIFRADO_DEBIL = {"sweet32", "lucky13", "rc4", "3des", "freak", "logjam", "drown"}
+_GRUPOS_META = {
+    "proto": ("tls-proto-obsoleto", "Protocolos TLS obsoletos habilitados (TLS 1.0/1.1 o anteriores)",
+              "Desactivar SSLv2/SSLv3/TLS 1.0/1.1 en el servidor y permitir solo TLS 1.2 y 1.3."),
+    "cifrado": ("tls-cifrado-debil", "Suites de cifrado débiles habilitadas",
+                "Eliminar las suites débiles (NULL, EXPORT, RC4, 3DES, CBC sin AEAD, 64-bit) y aplicar "
+                "la configuración 'intermediate' de Mozilla."),
+}
+
+
+def _grupo_de(tid: str) -> str | None:
+    t = tid.lower()
+    if t in _PROTO_OBSOLETO:
+        return "proto"
+    if t in _CIFRADO_DEBIL or t.startswith("cipherlist"):
+        return "cifrado"
+    return None
+
+
+def agrupar_tls(findings: list[dict]) -> list[dict]:
+    """Colapsa los hallazgos de testssl en sus causas raíz (protocolos obsoletos,
+    cifrado débil). Vulnerabilidades concretas (Heartbleed, ROBOT, BREACH…) y el
+    certificado se mantienen individuales."""
+    grupos: dict[str, dict] = {}
+    salida: list[dict] = []
+    for f in findings:
+        g = _grupo_de(f.get("plantilla", ""))
+        if g is None:
+            salida.append(f)
+            continue
+        d = grupos.setdefault(g, {"miembros": [], "sev": "low", "cve": [], "det": []})
+        d["miembros"].append(f.get("plantilla", ""))
+        if _SEV_RANK.get(f.get("severidad", ""), 0) > _SEV_RANK.get(d["sev"], 0):
+            d["sev"] = f["severidad"]
+        for c in f.get("cve", []):
+            if c not in d["cve"]:
+                d["cve"].append(c)
+        if f.get("detalle"):
+            d["det"].append(f"{f.get('plantilla', '')}: {f['detalle']}")
+    for g, d in grupos.items():
+        gid, titulo, rem = _GRUPOS_META[g]
+        nf = {
+            "severidad": d["sev"], "id": gid, "titulo": titulo, "plantilla": gid,
+            "detalle": f"testssl.sh detectó {len(d['miembros'])} elemento(s) relacionados con esta misma "
+                       f"causa raíz: {', '.join(d['miembros'])}.",
+            "remediacion": rem,
+            "evidencia": "; ".join(d["det"])[:400],
+        }
+        if d["cve"]:
+            nf["cve"] = d["cve"]
+        salida.append(nf)
+    return salida
 
 
 def resumen(datos: list[dict]) -> dict:

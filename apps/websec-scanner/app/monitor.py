@@ -19,7 +19,7 @@ import time
 
 import httpx
 
-from . import report, scanners, store
+from . import report, scanners, store, tarifas
 
 ALERT_MIN_CVSS = float(os.environ.get("ALERT_MIN_CVSS", "4.0") or 4.0)
 ALERT_CERT_DAYS = int(os.environ.get("ALERT_CERT_DAYS", "21") or 21)
@@ -113,6 +113,7 @@ def escanear_asset(asset: dict) -> str:
     finally:
         _estado["escaneando"] = None
     res["scan_id"] = sid
+    tarifas.aplicar(res, store.previous_scan(sid))
     store.finish_scan(sid, res)
     lineas = evaluar_alertas(asset, (anterior or {}).get("result"), res)
     if lineas:

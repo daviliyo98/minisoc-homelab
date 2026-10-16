@@ -88,21 +88,15 @@
   </header>
 
   <div class="tabs">
-    <button class="tab active" data-tab="web">🌐 Web</button>
-    <button class="tab" data-tab="mail">✉️ Correo</button>
-    <button class="tab" data-tab="dns">🧭 DNS</button>
-    <button class="tab" data-tab="activo">⚡ Activo</button>
-    <button class="tab" data-tab="zap">🕷️ ZAP</button>
-    <button class="tab" data-tab="recon">🛰️ Recon</button>
-    <button class="tab" data-tab="full">🧩 Completo</button>
-    <button class="tab" data-tab="tls">🔐 TLS a fondo</button>
+    <button class="tab active" data-tab="pasivo">🛡️ Análisis pasivo</button>
+    <button class="tab" data-tab="activo">⚡ Análisis activo</button>
     <button class="tab" data-tab="hist">📜 Historial</button>
   </div>
 
   <div class="card">
     <div class="row">
       <div id="url-group">
-        <label for="url">URL a analizar</label>
+        <label for="url">URL o dominio a analizar</label>
         <input id="url" type="text" placeholder="https://ejemplo.com" autocomplete="off">
       </div>
       <div id="domain-group" class="hidden">
@@ -123,7 +117,7 @@
     <div id="zap-opts" class="hidden" style="margin-top:10px">
       <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;color:var(--text);font-size:.85rem">
         <input id="zap-activo" type="checkbox" style="width:auto;margin-top:3px">
-        <span>Escaneo <b>activo</b> de inyección (SQLi, XSS…). Más potente y más lento; <b>más intrusivo</b>. Sin marcar, ZAP solo rastrea y analiza en modo pasivo.</span>
+        <span>Incluir <b>pruebas de inyección</b> (ZAP activo: SQLi, XSS…): más potente, más lento y <b>más intrusivo</b>; requiere el modo activo habilitado en el servidor. Sin marcar, el análisis activo hace recon web + TLS + Nuclei + ZAP (spider/pasivo).</span>
       </label>
     </div>
     <button id="go">Analizar web</button>
@@ -131,14 +125,14 @@
 
   <div id="result" class="card hidden"></div>
 
-  <p class="foot">Solo sistemas propios o con autorización explícita. Diagnóstico pasivo de la exposición externa: no sondea ni ataca, y <b>no sustituye</b> una auditoría interna del servidor ni un test de intrusión (pentest).</p>
+  <p class="foot">Solo sistemas propios o con autorización explícita. El <b>análisis activo</b> envía peticiones reales al objetivo; úselo solo con autorización por escrito. <b>No sustituye</b> una auditoría interna del servidor ni un test de intrusión (pentest) completo.</p>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const sevClass = s => ({alta:"b-alta",media:"b-media",baja:"b-baja",informativo:"b-info"}[s] || "b-baja");
 const scoreColor = n => n>=80?"var(--ok)":n>=50?"var(--media)":"var(--alta)";
-let tab = "web";
+let tab = "pasivo";
 
 // Recuerda la clave en el navegador para no reescribirla cada vez
 try { $("#key").value = localStorage.getItem("websec_key") || ""; } catch(e){}
@@ -148,22 +142,21 @@ document.querySelectorAll(".tab").forEach(b=>{
   b.addEventListener("click", ()=>{
     tab = b.dataset.tab;
     document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x===b));
-    const needsUrl = ["web","activo","zap","full","tls"].includes(tab);
-    const needsDomain = (tab==="mail" || tab==="dns" || tab==="recon");
-    const needsAuthz = (tab==="activo" || tab==="zap" || tab==="tls");
+    const needsUrl = (tab==="pasivo" || tab==="activo");
+    const needsAuthz = (tab==="activo");
     $("#url-group").classList.toggle("hidden", !needsUrl);
-    $("#domain-group").classList.toggle("hidden", !needsDomain);
+    $("#domain-group").classList.toggle("hidden", true);
     $("#authz-group").classList.toggle("hidden", !needsAuthz);
-    $("#zap-opts").classList.toggle("hidden", tab!=="zap");
+    $("#zap-opts").classList.toggle("hidden", tab!=="activo");
     $("#go").textContent = goLabel();
     $("#result").classList.add("hidden");
     if(tab==="hist") loadHist();
   });
 });
 function goLabel(){
-  return ({mail:"Analizar correo", dns:"Analizar DNS", activo:"Escanear (activo)", zap:"Escanear con ZAP",
-           recon:"Descubrir superficie expuesta", full:"Análisis completo (web + correo + DNS)",
-           tls:"Analizar TLS a fondo (testssl.sh)", hist:"Actualizar historial"})[tab] || "Analizar web";
+  return ({pasivo:"Analizar (pasivo: web + correo + DNS + OSINT)",
+           activo:"Analizar (activo: recon web + TLS + Nuclei + ZAP)",
+           hist:"Actualizar historial"})[tab] || "Analizar";
 }
 
 function sumFindings(h){ return h.map(f=>{
@@ -194,10 +187,15 @@ function scoreHead(d){
   const p = d.pago_por_hallazgo;
   const pago = p ? '<div class="meta" style="margin-top:3px">Facturables (pago por hallazgo): <b>'+p.facturables+'</b>'+
     ' — C'+p.criticas+' · A'+p.altas+' · M'+p.medias+' · B'+p.bajas+(p.info?' · info '+p.info:'')+'</div>' : '';
+  const q = d.presupuesto, eur = n => Number(n).toLocaleString("es-ES")+' €';
+  const presu = q ? '<div class="meta" style="margin-top:3px" title="'+esc(q.nota)+'">Estimación: <b>'+eur(q.total)+'</b>'+
+    (q.modalidad==="primer-escaneo" ? ' (cuota '+eur(q.cuota_minima)+' + hallazgos '+eur(q.subtotal_hallazgos)+')'
+                                    : ' (re-escaneo: solo hallazgos nuevos)')+
+    (q.tope_aplicado ? ' · <b>tope '+eur(q.tope)+' aplicado</b>' : ' · tope '+eur(q.tope))+' · sin IVA</div>' : '';
   return '<div class="score"><div class="num" style="color:'+scoreColor(d.puntuacion)+'">'+d.puntuacion+'</div>'+
     '<div><div style="font-weight:600">'+esc(d.objetivo)+'</div>'+
     '<div class="meta">'+d.resumen.altas+' altas · '+d.resumen.medias+' medias · '+d.resumen.bajas+' bajas'+
-    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+cmax+'</div>'+pago+'</div></div>'+reportBar(d.scan_id);
+    (d.resumen.informativos ? ' · '+d.resumen.informativos+' info' : '')+cmax+'</div>'+pago+presu+'</div></div>'+reportBar(d.scan_id);
 }
 
 // Escaneo activo en 2º plano: sondea el estado del trabajo hasta que termina.
@@ -240,9 +238,9 @@ async function run(){
   if(tab==="hist"){ loadHist(); return; }
   const key = $("#key").value.trim();
   const box = $("#result");
-  const target = (tab==="mail"||tab==="dns"||tab==="recon") ? $("#domain").value.trim() : $("#url").value.trim();
+  const target = $("#url").value.trim();
   if(!target) return;
-  const esSegundoPlano = (tab==="activo" || tab==="zap" || tab==="tls");
+  const esSegundoPlano = (tab==="activo");
   if(esSegundoPlano && !$("#authz").checked){ alert("Marca la casilla de autorización para escanear este objetivo."); return; }
   try { localStorage.setItem("websec_key", key); } catch(e){}
 
@@ -251,14 +249,8 @@ async function run(){
   box.innerHTML = '<span class="meta">Analizando ' + target + '…</span>';
 
   let endpoint, payload;
-  if(tab==="web"){ endpoint="/scan"; payload={url: target}; }
-  else if(tab==="mail"){ endpoint="/scan-mail"; payload={domain: target}; }
-  else if(tab==="dns"){ endpoint="/scan-dns"; payload={domain: target}; }
-  else if(tab==="recon"){ endpoint="/scan-recon"; payload={domain: target}; }
-  else if(tab==="full"){ endpoint="/scan-full"; payload={url: target}; }
-  else if(tab==="tls"){ endpoint="/scan-tls"; payload={url: target, autorizo: $("#authz").checked}; }
-  else if(tab==="activo"){ endpoint="/scan-active"; payload={url: target, autorizo: $("#authz").checked}; }
-  else { endpoint="/scan-zap"; payload={url: target, autorizo: $("#authz").checked, activo: $("#zap-activo").checked}; }
+  if(tab==="pasivo"){ endpoint="/scan-full"; payload={url: target}; }
+  else { endpoint="/scan-activo"; payload={url: target, autorizo: $("#authz").checked, inyeccion: $("#zap-activo").checked}; }
   try{
     const r = await fetch(endpoint, {
       method:"POST",
@@ -272,12 +264,8 @@ async function run(){
       else if(det && typeof det !== "string") det = JSON.stringify(det);
       box.innerHTML = '<p class="err">Error '+r.status+': '+(det||"fallo")+'</p>'; return;
     }
-    if(tab==="web") renderWeb(data);
-    else if(tab==="mail") renderMail(data);
-    else if(tab==="dns") renderDns(data);
-    else if(tab==="recon") renderRecon(data);
-    else if(tab==="full") renderFull(data);
-    else { pollActive(data.job_id, key); return; }   // activo/zap/tls: trabajo en 2º plano
+    if(tab==="pasivo") renderFull(data);
+    else { pollActive(data.job_id, key); return; }   // activo: trabajo en 2º plano
   }catch(e){
     box.innerHTML = '<p class="err">No se pudo contactar con la API.</p>';
   }finally{
@@ -334,6 +322,12 @@ function renderActive(d){
   } else if(esZap){
     etiqueta = '🕷️ Escaneo con OWASP ZAP (spider + pasivo) — solo objetivos autorizados';
     vacio = 'ZAP no detectó avisos en el análisis pasivo.';
+  } else if(d.motor === "combo"){
+    etiqueta = '⚡ Análisis ACTIVO unificado (pasivo + recon web + TLS + Nuclei + ZAP) — solo objetivos autorizados';
+    vacio = 'Sin hallazgos activos. Revisa el informe para el detalle del análisis pasivo.';
+  } else if(d.motor === "webrecon"){
+    etiqueta = '🔎 Reconocimiento web activo-ligero — solo objetivos autorizados';
+    vacio = 'Sin ficheros sensibles ni problemas de reconocimiento detectados.';
   } else {
     etiqueta = '⚡ Escaneo ACTIVO con Nuclei — solo objetivos autorizados';
     vacio = 'Sin vulnerabilidades conocidas detectadas por Nuclei.';
@@ -357,7 +351,7 @@ function renderActive(d){
 
 function renderDns(d){
   let h = scoreHead({objetivo:d.dominio, puntuacion:d.puntuacion, resumen:d.resumen,
-                     cvss_max:d.cvss_max, pago_por_hallazgo:d.pago_por_hallazgo, scan_id:d.scan_id});
+                     cvss_max:d.cvss_max, pago_por_hallazgo:d.pago_por_hallazgo, presupuesto:d.presupuesto, scan_id:d.scan_id});
   const R = d.registros || {};
   const filas = [];
   const push = (k, arr) => { (arr||[]).forEach(v => filas.push([k, v])); };
@@ -383,14 +377,15 @@ function reportBar(id){
   if(!id) return "";
   return '<div class="rbar">'+
     '<button onclick="openReport(\''+id+'\',\'html\')">📄 Informe HTML / PDF</button>'+
+    '<button onclick="openReport(\''+id+'\',\'html\',true)">💶 Informe + presupuesto</button>'+
     '<button onclick="openReport(\''+id+'\',\'md\')">⬇ Markdown</button>'+
     '<button onclick="openReport(\''+id+'\',\'sarif\')">⬇ SARIF</button>'+
     '<button onclick="openReport(\''+id+'\',\'json\')">⬇ JSON</button>'+
     '<button onclick="showDiff(\''+id+'\')">↔ Comparar con el anterior</button></div><div id="diff-'+id+'"></div>';
 }
 // La clave va en cabecera (nunca en la URL): se descarga con fetch y se abre como blob.
-async function openReport(id, fmt){
-  const r = await fetch("/scans/"+id+"/report?format="+fmt, {headers:{"x-api-key":key()}});
+async function openReport(id, fmt, precios){
+  const r = await fetch("/scans/"+id+"/report?format="+fmt+(precios?"&precios=1":""), {headers:{"x-api-key":key()}});
   if(!r.ok){ alert("Error "+r.status+" al generar el informe"); return; }
   const blob = await r.blob(), url = URL.createObjectURL(blob);
   if(fmt==="html"){ window.open(url, "_blank"); return; }
@@ -465,7 +460,7 @@ function renderRecon(d){
 }
 function renderFull(d){
   let h = scoreHead(d);
-  const S = d.secciones||{}, nombres = {web:"🌐 Web", correo:"✉️ Correo", dns:"🧭 DNS"};
+  const S = d.secciones||{}, nombres = {web:"🌐 Web", correo:"✉️ Correo", dns:"🧭 DNS", recon:"🛰️ Recon (OSINT)"};
   h += '<div class="checks">'+Object.keys(nombres).map(k=>{
     const s = S[k];
     return '<div class="chk"><span class="nm">'+nombres[k]+'</span><span class="dt">'+

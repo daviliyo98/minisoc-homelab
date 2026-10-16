@@ -106,6 +106,7 @@ def test_diff_y_renderers():
     sarif = json.loads(report.render_sarif(b))
     assert sarif["version"] == "2.1.0" and sarif["runs"][0]["results"][0]["ruleId"] == "csp-weak"
     assert "## Hallazgos" in report.render_md(b, d)
+    assert "Almenasec. Todos los derechos reservados. x" in html and "MINISOC" not in html
 
 
 def test_alerta_certificado_solo_al_cruzar_umbral():
@@ -191,3 +192,205 @@ def test_testssl_fatal_es_error(monkeypatch, tmp_path):
     monkeypatch.setattr(tlsdeep, "disponible", lambda: True)
     res = tlsdeep.scan_tls("ej.com", "93.184.216.34")
     assert res["ok"] is False and "dig" in res["error"]
+
+
+# --------------------------------------------------------------------------- #
+#  Cabecera server de CDN y tarifas
+# --------------------------------------------------------------------------- #
+@respx.mock
+def test_server_de_cdn_no_es_hallazgo(monkeypatch):
+    from app import checks
+    monkeypatch.setattr(checks, "es_publico", lambda h: True)
+    respx.get("https://cf.com/").mock(return_value=httpx.Response(200, headers={"server": "cloudflare"}))
+    respx.get("https://nx.com/").mock(return_value=httpx.Response(200, headers={"server": "nginx/1.18.0"}))
+    t = lambda u: [f["titulo"] for f in asyncio.run(checks.check_http(u, 5))["findings"]]
+    assert not any("server" in x for x in t("https://cf.com/"))
+    assert "La cabecera server revela tecnología" in t("https://nx.com/")
+
+
+def _res(*tramos):
+    return {"hallazgos": [{"servicio": "web", "titulo": f"h{i}", "severidad_cvss": s} for i, s in enumerate(tramos)]}
+
+
+def test_presupuesto_primer_escaneo_y_tope(monkeypatch):
+    from app import tarifas
+    q = tarifas.presupuesto(_res("media", "baja", "info"))
+    assert q["modalidad"] == "primer-escaneo" and q["total"] == 190 + 75 + 25 and not q["tope_aplicado"]
+    q = tarifas.presupuesto(_res(*["critica"] * 5))
+    assert q["tope_aplicado"] and q["total"] == 690
+    monkeypatch.setenv("PRECIO_TOPE", "2000")
+    assert tarifas.presupuesto(_res(*["critica"] * 5))["total"] == 190 + 5 * 250
+
+
+def test_presupuesto_reescaneo_solo_nuevos():
+    from app import tarifas
+    antes = _res("media", "baja")
+    ahora = {"hallazgos": antes["hallazgos"] + [{"servicio": "web", "titulo": "nuevo", "severidad_cvss": "alta"}]}
+    q = tarifas.presupuesto(ahora, antes)
+    assert q["modalidad"] == "re-escaneo" and q["cuota_minima"] == 0 and q["total"] == 150
+    assert tarifas.presupuesto(antes, antes)["total"] == 0
+
+
+def test_informe_con_presupuesto(client, monkeypatch):
+    from app import scanners
+
+    async def fake_web(url, timeout=10.0):
+        return scanners.completar({"objetivo": url, "puntuacion": 90, "aviso": "",
+                                   "hallazgos": [{"id": "csp-weak", "titulo": "CSP débil", "severidad": "media"}]}, "web")
+    monkeypatch.setattr(scanners, "run_web", fake_web)
+    d = client.post("/scan", json={"url": "ej.com"}, headers=PASIVO).json()
+    assert d["presupuesto"]["total"] == 190 + 75
+    sid = d["scan_id"]
+    assert "Estimación económica" not in client.get(f"/scans/{sid}/report", headers=PASIVO).text
+    assert "265 €" in client.get(f"/scans/{sid}/report?precios=1", headers=PASIVO).text
+    d2 = client.post("/scan", json={"url": "ej.com"}, headers=PASIVO).json()
+    assert d2["presupuesto"]["modalidad"] == "re-escaneo" and d2["presupuesto"]["total"] == 0
+
+
+def test_full_sin_duplicados_entre_modulos(monkeypatch):
+    from app import report, scanners, severity, tarifas
+
+    def sec(serv, *ids_titulos):
+        return scanners.completar({"puntuacion": 90, "hallazgos": [
+            {"titulo": t, "severidad": "baja"} for t in ids_titulos]}, serv)
+
+    async def web(url, timeout=10.0):
+        return sec("web", "Sin registro CAA", "Falta la cabecera x-frame-options")
+    monkeypatch.setattr(scanners, "run_web", web)
+    monkeypatch.setattr(scanners, "run_mail", lambda d: sec(
+        "correo", "Dominio sin DNSSEC", "Sin MTA-STS", "No existe registro SPF", "SPF permite a cualquiera ('+all')"))
+    monkeypatch.setattr(scanners, "run_dns", lambda d: sec(
+        "dns", "DNSSEC no habilitado", "Sin registro CAA", "Sin registro SPF", "SPF permisivo (+all)"))
+    # recon OSINT no aporta solapamientos; lo fijamos vacío para un test determinista (sin red).
+    monkeypatch.setattr(scanners, "run_recon", lambda d: sec("recon"))
+    res = asyncio.run(scanners.run_full("https://ej.com"))
+    titulos = [f["titulo"] for f in report.hallazgos_de(res)]
+    assert len(titulos) == len(set(severity.identidad(f) for f in report.hallazgos_de(res))) == 6
+    for tema in ("DNSSEC", "CAA", "SPF permi", "registro SPF"):
+        assert sum(tema in t for t in titulos) == 1, tema
+    sec_de = lambda n: [f["titulo"] for f in res["secciones"][n]["hallazgos"]]
+    assert "No existe registro SPF" in sec_de("correo") and "DNSSEC no habilitado" in sec_de("dns")
+    assert "Sin registro CAA" in sec_de("dns") and sec_de("web") == ["Falta la cabecera x-frame-options"]
+    # Un escaneo antiguo (guardado con duplicados) tampoco los muestra ni los cobra dos veces
+    viejo = {"hallazgos": [{"id": "mail-no-dnssec", "titulo": "Dominio sin DNSSEC", "severidad_cvss": "baja"},
+                           {"id": "dns-no-dnssec", "titulo": "DNSSEC no habilitado", "severidad_cvss": "baja"}]}
+    assert len(report.hallazgos_de(viejo)) == 1
+    assert tarifas.presupuesto(viejo)["subtotal_hallazgos"] == 25
+
+
+# --------------------------------------------------------------------------- #
+#  Agrupación TLS por causa raíz, inventario, prioridad y notas operativas
+# --------------------------------------------------------------------------- #
+def test_tls_agrupa_por_causa_raiz():
+    from app import tlsdeep
+    raw = [
+        {"severidad": "medium", "titulo": "TLS: cipherlist_3DES_IDEA", "detalle": "offered", "plantilla": "cipherlist_3DES_IDEA"},
+        {"severidad": "medium", "titulo": "TLS: BEAST_CBC_TLS1", "detalle": "x", "plantilla": "BEAST_CBC_TLS1"},
+        {"severidad": "low", "titulo": "TLS: TLS1", "detalle": "offered", "plantilla": "TLS1"},
+        {"severidad": "low", "titulo": "TLS: TLS1_1", "detalle": "offered", "plantilla": "TLS1_1"},
+        {"severidad": "low", "titulo": "TLS: cipherlist_OBSOLETED", "detalle": "offered", "plantilla": "cipherlist_OBSOLETED"},
+        {"severidad": "low", "titulo": "TLS: SWEET32", "detalle": "64 bit", "plantilla": "SWEET32", "cve": ["CVE-2016-2183"]},
+        {"severidad": "low", "titulo": "TLS: LUCKY13", "detalle": "cbc", "plantilla": "LUCKY13"},
+        {"severidad": "medium", "titulo": "TLS: BREACH", "detalle": "gzip", "plantilla": "BREACH"},
+        {"severidad": "medium", "titulo": "TLS: cert_keySize", "detalle": "2048", "plantilla": "cert_keySize"},
+    ]
+    g = tlsdeep.agrupar_tls(raw)
+    ids = {f.get("id") for f in g}
+    titulos = {f["titulo"] for f in g}
+    # Los 7 de config antigua -> 2 causas raíz; BREACH y cert quedan sueltos.
+    assert "tls-proto-obsoleto" in ids and "tls-cifrado-debil" in ids
+    assert "TLS: BREACH" in titulos and "TLS: cert_keySize" in titulos
+    assert len(g) == 4
+    cifrado = next(f for f in g if f.get("id") == "tls-cifrado-debil")
+    assert "CVE-2016-2183" in cifrado.get("cve", [])
+    assert cifrado["severidad"] == "medium"  # el máximo de sus miembros
+
+
+def test_catalogo_cubre_tls_raiz():
+    from app import severity
+    fs = [{"id": i, "severidad": "baja", "titulo": i} for i in ("tls-proto-obsoleto", "tls-cifrado-debil")]
+    severity.enrich(fs, "tls")
+    assert all(f["cvss"] != "—" and f["severidad_cvss"] == "media" for f in fs)
+
+
+def test_inventario_saca_detecciones_de_nuclei():
+    from app import severity
+    fs = [
+        {"id": "web-env-exposed", "severidad": "critica", "titulo": "Fichero .env expuesto"},
+        {"severidad": "informativo", "titulo": "WAF Detection", "origen": "nuclei"},
+        {"severidad": "informativo", "titulo": "Wappalyzer Technology Detection", "origen": "nuclei"},
+        {"id": "wp-detected", "severidad": "informativo", "titulo": "WordPress detectado", "origen": "recon-web"},
+        {"id": "web-no-securitytxt", "severidad": "informativo", "titulo": "Sin security.txt", "origen": "recon-web"},
+    ]
+    severity.enrich(fs)
+    inv = {f["titulo"] for f in fs if f.get("inventario")}
+    assert inv == {"WAF Detection", "Wappalyzer Technology Detection", "WordPress detectado"}
+    # .env es un hallazgo real; security.txt es una recomendación, no inventario.
+    assert not any(f.get("inventario") for f in fs if f["titulo"] in ("Fichero .env expuesto", "Sin security.txt"))
+
+
+def test_prioridad_y_orden():
+    from app import report, severity
+    fs = [
+        {"id": "mail-no-dnssec", "severidad": "baja", "titulo": "Dominio sin DNSSEC"},
+        {"id": "mail-no-dmarc", "severidad": "baja", "titulo": "No existe registro DMARC"},
+        {"id": "wp-user-enum", "severidad": "media", "titulo": "Enumeración de usuarios de WordPress"},
+        {"id": "web-env-exposed", "severidad": "critica", "titulo": "Fichero .env expuesto"},
+    ]
+    severity.enrich(fs)
+    prio = {f["id"]: f["prioridad"] for f in fs}
+    assert prio == {"web-env-exposed": "P0", "wp-user-enum": "P0",
+                    "mail-no-dmarc": "P1", "mail-no-dnssec": "P2"}
+    scan = {"id": "p1", "tipo": "activo", "objetivo": "ej.com", "started": None, "finished": None,
+            "result": {"hallazgos": fs, "cvss_max": 9.8, "puntuacion": 40}}
+    orden = [f["prioridad"] for f in report._ordenados(scan)]
+    assert orden == sorted(orden, key=lambda p: {"P0": 0, "P1": 1, "P2": 2}[p])
+
+
+def test_notas_operativas():
+    from app import severity
+    fs = [
+        {"id": "cookie-flags", "severidad": "media", "titulo": "Cookie 'x' sin flags httponly"},
+        {"id": "mail-dmarc-none", "severidad": "baja", "titulo": "DMARC solo en modo observación (p=none)"},
+        {"id": "missing-xcto", "severidad": "baja", "titulo": "Falta la cabecera x-content-type-options"},
+    ]
+    severity.enrich(fs)
+    assert "Polylang" in fs[0]["nota_operativa"]
+    assert "quarantine" in fs[1]["nota_operativa"]
+    assert fs[2].get("nota_operativa") is None  # sin nota definida
+
+
+def test_informe_separa_hallazgos_de_inventario():
+    from app import report, severity
+    fs = [
+        {"id": "web-env-exposed", "severidad": "critica", "titulo": "Fichero .env expuesto", "detalle": "x"},
+        {"severidad": "informativo", "titulo": "WAF Detection", "detalle": "waf", "origen": "nuclei"},
+    ]
+    severity.enrich(fs)
+    scan = {"id": "inv1", "tipo": "activo", "objetivo": "ej.com", "started": None, "finished": None,
+            "result": {"hallazgos": fs, "cvss_max": 9.8, "puntuacion": 40, "aviso": "x"}}
+    h = report.render_html(scan)
+    md = report.render_md(scan)
+    assert "Inventario y detecciones" in h and "Inventario y detecciones" in md
+    # La detección va al inventario, después de la sección de hallazgos.
+    assert h.find("WAF Detection") > h.find("Inventario y detecciones")
+    assert h.find("Fichero .env expuesto") < h.find("Inventario y detecciones")
+
+
+def test_reconweb_soft404_y_deteccion_wp():
+    from app import reconweb
+
+    class R:
+        def __init__(self, status, body=b""):
+            self.status_code = status
+            self.content = body
+
+    f404 = (200, 1000)  # el sitio responde 200 a todo, ~1000 B
+    assert reconweb._es_soft404(R(404), (404, 0)) is True
+    assert reconweb._es_soft404(R(200, b"x" * 1000), f404) is True   # mismo tamaño que el 404
+    assert reconweb._es_soft404(R(200, b"x" * 5000), f404) is False  # claramente distinto
+    assert reconweb._es_soft404(None, (404, 0)) is True
+
+    wp = '<meta name="generator" content="WordPress 6.5"><link href="/wp-content/x.css">'
+    assert reconweb._detecta_wp(wp, None, "https://x", f404) is True
+    assert reconweb._detecta_wp("<html>sitio estático</html>", None, "https://x", f404) is False

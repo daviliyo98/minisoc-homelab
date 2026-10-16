@@ -11,6 +11,7 @@ Referencias: RFC 7208 (SPF), RFC 6376 (DKIM), RFC 7489 (DMARC).
 """
 from __future__ import annotations
 
+import os
 import re
 from urllib.parse import urlparse
 
@@ -22,6 +23,15 @@ COMMON_DKIM_SELECTORS = [
     "default", "google", "selector1", "selector2", "k1", "k2", "dkim",
     "mail", "s1", "s2", "smtp", "mandrill", "mailjet", "sendgrid",
     "zoho", "zohomail", "protonmail", "pm", "fm1", "fm2", "fm3", "amazonses",
+    # IONOS / 1&1 / Hostalia y similares publican DKIM con estos selectores.
+    "selectorext1", "selectorext2",
+]
+
+# Selectores propios adicionales (no estándar) que asigna un proveedor concreto.
+# Se configuran en DKIM_SELECTORS (separados por comas) y evitan el falso
+# positivo de "no se detectó DKIM" cuando el selector no es de los habituales.
+_EXTRA_DKIM_SELECTORS = [
+    s.strip() for s in os.getenv("DKIM_SELECTORS", "").split(",") if s.strip()
 ]
 
 _RESOLVER = dns.resolver.Resolver()
@@ -221,7 +231,7 @@ def check_dmarc(domain: str) -> dict:
 # --------------------------------------------------------------------------- #
 def check_dkim(domain: str) -> dict:
     encontrados = []
-    for sel in COMMON_DKIM_SELECTORS:
+    for sel in COMMON_DKIM_SELECTORS + _EXTRA_DKIM_SELECTORS:
         recs = _txt(f"{sel}._domainkey.{domain}")
         if any("v=dkim1" in r.lower() or "p=" in r.lower() for r in recs):
             encontrados.append(sel)

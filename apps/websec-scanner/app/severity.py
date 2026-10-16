@@ -198,6 +198,23 @@ CATALOG.update({
     "dns-no-dnssec":          _c(3.7, "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N", "CWE-345", "A02:2021 — Cryptographic Failures", "dns"),
 })
 
+# --- Catálogo WEB-APP (reconocimiento activo-ligero: ficheros y WordPress) ---
+_MISCONF = "A05:2021 — Security Misconfiguration"
+CATALOG.update({
+    "web-git-exposed":    _c(7.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "CWE-527", _MISCONF),
+    "web-env-exposed":    _c(9.8, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "CWE-200", _MISCONF),
+    "web-config-backup":  _c(9.1, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N", "CWE-530", _MISCONF),
+    "web-backup-exposed": _c(7.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "CWE-530", _MISCONF),
+    "web-info-files":     _c(3.1, "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N", "CWE-200", _MISCONF),
+    "web-no-securitytxt": _c(0.0, "—", "CWE-1059", "RFC 9116 / buenas prácticas"),
+    "wp-detected":        _c(0.0, "—", "CWE-200", "Fingerprinting / informativo"),
+    "wp-user-enum":       _c(5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N", "CWE-204", _SPOOF),
+    "wp-xmlrpc":          _c(5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L", "CWE-799", _MISCONF),
+    "wp-login-exposed":   _c(0.0, "—", "CWE-307", _MISCONF),
+    "tls-proto-obsoleto": _c(5.9, "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N", "CWE-327", "A02:2021 — Cryptographic Failures", "tls"),
+    "tls-cifrado-debil":  _c(5.9, "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N", "CWE-327", "A02:2021 — Cryptographic Failures", "tls"),
+})
+
 
 # --- Catálogo de checks web añadidos (HTML, CORS) ---
 CATALOG.update({
@@ -215,6 +232,79 @@ CATALOG.update({
     "recon-open-ports":       _c(0.0, "—", "CWE-668", "Superficie de exposición / inventario", "recon"),
     "recon-known-cves":       _c(6.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N", "CWE-1104", "A06:2021 — Vulnerable and Outdated Components", "recon"),
 })
+
+# --- Notas de operatividad / rotura ---------------------------------------- #
+# Avisos de "ojo, esto puede romper algo" o de contexto, para que la remediación
+# sea aplicable en el mundo real y no un consejo naíf.
+NOTAS_OPERATIVAS = {
+    "cookie-flags": "Si a la cookie solo le falta HttpOnly y algún plugin la lee por JavaScript "
+                    "(p. ej. Polylang en WordPress), activar HttpOnly puede romper su funcionamiento: "
+                    "comprueba primero qué cookie es. Secure y SameSite deben ir siempre.",
+    "missing-csp": "Despliega la CSP primero en Content-Security-Policy-Report-Only para recoger "
+                   "violaciones sin romper la web; cuando el informe esté limpio, pásala a modo enforce.",
+    "csp-weak": "Ajusta la CSP en Report-Only antes de endurecerla, para no bloquear por error recursos "
+                "legítimos (fuentes, analítica, mapas).",
+    "missing-hsts": "Activa HSTS solo cuando TODO el dominio (y, con includeSubDomains/preload, los "
+                    "subdominios) sirva por HTTPS verificado; si no, dejarías recursos inaccesibles. "
+                    "Envía a la lista preload solo tras unas semanas estable.",
+    "no-caa": "Incluye en el CAA la CA que emite tus certificados (p. ej. letsencrypt.org); si falta, "
+              "las renovaciones automáticas fallarán.",
+    "leaky-header": "En muchos hostings compartidos o detrás de un CDN esta cabecera no es configurable; "
+                    "si es tu caso, documéntalo como riesgo asumido en lugar de intentar quitarla.",
+    "mail-no-dmarc": "Sube la política por fases (none → quarantine → reject) revisando los informes rua "
+                     "en cada una. Saltar directo a p=reject puede bloquear correo legítimo (newsletters, "
+                     "formularios, terceros).",
+    "mail-dmarc-none": "No pases de golpe a p=reject: sube a p=quarantine, revisa los informes rua 2-4 "
+                       "semanas y, cuando no haya falsos positivos, a p=reject.",
+}
+
+# --- Prioridad por riesgo explotable (plan de remediación) ------------------ #
+# P0 = explotable / impacto directo ya · P1 = endurecer pronto · P2 = defensa en
+# profundidad a medio/largo plazo. Por defecto se deriva del CVSS, con ajustes
+# que reflejan la explotabilidad real (no solo la puntuación).
+_PRIORIDAD_OVERRIDE = {
+    "wp-user-enum": "P0",
+    "mail-spf-plusall": "P0", "dns-spf-plusall": "P0",
+    "wp-xmlrpc": "P1",
+    "mail-no-dmarc": "P1", "mail-dmarc-none": "P1",
+    "mail-no-spf": "P1", "dns-no-spf": "P1", "mail-spf-weak": "P1",
+    "csp-weak": "P1",
+    "mail-no-mta-sts": "P2", "mail-no-tls-rpt": "P2",
+    "mail-no-dnssec": "P2", "dns-no-dnssec": "P2", "no-caa": "P2",
+    "missing-referrer": "P2", "missing-permissions": "P2",
+    "mail-no-bimi": "P2", "mail-dmarc-no-rua": "P2",
+    "web-info-files": "P2", "web-no-securitytxt": "P2",
+    "wp-login-exposed": "P2", "wp-detected": "P2",
+    "leaky-header": "P2", "cert-expiring": "P2",
+}
+
+
+# Detecciones puras (tecnología/WAF/certificado/versiones) que NO son hallazgos:
+# van a una sección "Inventario", fuera de los hallazgos y sin facturar.
+_INVENTARIO_IDS = {"wp-detected"}
+_INV_KEYWORDS = ("detection", "detect", "wappalyzer", "technology", "issuer",
+                 "dns names", "wildcard", "tls version")
+
+
+def es_inventario(f: dict, servicio: str = "") -> bool:
+    if f.get("id") in _INVENTARIO_IDS:
+        return True
+    if f.get("severidad_cvss") != "info":
+        return False
+    titulo = (f.get("titulo") or "").lower()
+    es_nuclei = f.get("origen") == "nuclei" or servicio in ("activo", "nuclei")
+    return es_nuclei or any(k in titulo for k in _INV_KEYWORDS)
+
+
+def prioridad_de(fid, cvss_score: float) -> str:
+    if fid and fid in _PRIORIDAD_OVERRIDE:
+        return _PRIORIDAD_OVERRIDE[fid]
+    if cvss_score >= 7.0:
+        return "P0"
+    if cvss_score >= 4.0:
+        return "P1"
+    return "P2"
+
 
 def enrich(findings: list[dict], servicio: str = "web") -> list[dict]:
     """Enriquece cada hallazgo con CVSS v3.1, tramo, CWE, OWASP y servicio.
@@ -248,7 +338,30 @@ def enrich(findings: list[dict], servicio: str = "web") -> list[dict]:
                 f["cvss_score"] = round(_TIER_SCORE.get(clave, 0.0), 1)
             f.setdefault("cvss", "—")
             f["severidad"] = _DISPLAY[clave]
+        f["prioridad"] = prioridad_de(fid, f.get("cvss_score") or 0.0)
+        if fid and fid in NOTAS_OPERATIVAS:
+            f.setdefault("nota_operativa", NOTAS_OPERATIVAS[fid])
+        if es_inventario(f, servicio):
+            f["inventario"] = True
     return findings
+
+
+# El mismo problema detectado por dos módulos del escaneo completo (el módulo DNS
+# repite a alto nivel SPF, DNSSEC y CAA). Comparten identidad para no listarse ni
+# cobrarse dos veces. SECCION_PREFERIDA dice en qué sección se queda.
+_MISMO_PROBLEMA = {
+    "mail-no-spf": "spf-ausente", "dns-no-spf": "spf-ausente",
+    "mail-spf-plusall": "spf-plusall", "dns-spf-plusall": "spf-plusall",
+    "mail-no-dnssec": "dnssec", "dns-no-dnssec": "dnssec",
+    "no-caa": "caa",
+}
+SECCION_PREFERIDA = {"spf-ausente": "correo", "spf-plusall": "correo", "dnssec": "dns", "caa": "dns"}
+
+
+def identidad(f: dict) -> str:
+    """Identidad estable de un hallazgo (entre módulos y entre escaneos)."""
+    comun = _MISMO_PROBLEMA.get(f.get("id") or "")
+    return comun or f"{f.get('servicio', '')}|{f.get('titulo', '')}"
 
 
 def resumen(findings: list[dict]) -> dict:
