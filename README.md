@@ -8,22 +8,71 @@ Laboratorio doméstico en el que diseño, despliego, **verifico** y documento co
 
 ```mermaid
 flowchart LR
-    D[Dispositivos de casa] -->|DNS :53| P[Pi-hole v6<br/>filtrado]
-    P -->|127.0.0.1:5335| U[Unbound<br/>recursivo + DNSSEC]
-    U --> R[(Servidores raíz DNS)]
-    D -. fuga IPv6 .-> X[DNS del router ISP]
-    PT[Portainer CE] -. gestiona .-> P
-    PT -. gestiona .-> U
-    NE[node-exporter] --> PR[Prometheus] --> G[Grafana]
-    J[journald SSH] --> CS[CrowdSec] --> FW[Bouncer nftables]
-    CS -->|métricas 172.17.0.1:6060| PR
-    PO[homelab-portal] -->|sonda HTTP/TCP| P
-    PO --> G
-    PO --> W[websec-scanner]
-    PO --> PT
-    PO -. "127.0.0.1" .-> PR
-    TS[Tailscale<br/>sin puertos abiertos] --> PO
+    %% Leyenda: solido = flujo de datos · discontinuo = gestion, observacion o sondeo.
+    %% Las IPs van en las etiquetas de nodo, nunca en las de arista: en el texto de
+    %% un enlace punteado, un "127.0.0.1" rompe el parser (lo que rompio el diagrama).
+
+    D["Dispositivos de casa"]
+    J["journald SSH"]
+    TS["Tailscale<br/>sin puertos abiertos"]
+    X["DNS del router ISP"]
+    W["websec-scanner"]
+
+    subgraph dns["DNS"]
+        direction LR
+        P["Pi-hole v6<br/>filtrado"]
+        U["Unbound<br/>recursivo + DNSSEC"]
+        R[("Servidores raíz DNS")]
+    end
+
+    subgraph metricas["Observabilidad"]
+        direction LR
+        NE["node-exporter"]
+        PR["Prometheus<br/>solo loopback"]
+        G["Grafana"]
+    end
+
+    subgraph defensa["Seguridad"]
+        direction LR
+        CS["CrowdSec"]
+        FW["Bouncer<br/>nftables"]
+    end
+
+    subgraph gestion["Gestión y acceso"]
+        direction LR
+        PT["Portainer CE"]
+        LP["homelab-portal<br/>puerto 8090"]
+    end
+
+    %% --- plano de datos ---
+    D -->|"DNS :53"| P
+    P -->|"loopback :5335"| U
+    U --> R
+    PR --> G
+
+    %% --- deteccion y contencion ---
+    J --> CS
+    CS --> FW
+
+    %% --- observacion: telemetria hacia Prometheus ---
+    NE -.-> PR
+    CS -.->|"métricas"| PR
+
+    %% --- gestion y sondeo ---
+    TS --> LP
+    PT -.-> P
+    PT -.-> U
+    LP -.-> P
+    LP -.-> U
+    LP -.-> G
+    LP -.-> W
+    LP -.-> PR
+
+    %% --- fuga conocida, no resuelta ---
+    D -.->|"fuga IPv6"| X
 ```
+
+**Leyenda:** línea sólida = flujo de datos · línea discontinua = gestión, observación o sondeo. Por eso el portal no enruta tráfico: lo vigila.
 
 | Componente | Función | Estado |
 |---|---|---|
