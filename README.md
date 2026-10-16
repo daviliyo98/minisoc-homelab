@@ -17,6 +17,12 @@ flowchart LR
     NE[node-exporter] --> PR[Prometheus] --> G[Grafana]
     J[journald SSH] --> CS[CrowdSec] --> FW[Bouncer nftables]
     CS -->|métricas 172.17.0.1:6060| PR
+    PO[homelab-portal] -->|sonda HTTP/TCP| P
+    PO --> G
+    PO --> W["websec-scanner"]
+    PO --> PT
+    PO -. solo 127.0.0.1 .-> PR
+    TS["Tailscale<br/>sin puertos abiertos"] --> PO
 ```
 
 | Componente | Función | Estado |
@@ -29,6 +35,7 @@ flowchart LR
 | Grafana | Dashboards y alertas | ✅ |
 | CrowdSec + firewall bouncer (nftables) | Detección de ataques y bloqueo automático, inteligencia colaborativa; métricas en Grafana | ✅ |
 | websec-scanner (FastAPI) | Analizador pasivo de postura de seguridad web (cabeceras, TLS, security.txt) | ✅ |
+| homelab-portal (FastAPI) | Catálogo de los servicios con estado de salud en vivo y sus endpoints de API | ✅ |
 
 ### Listas de bloqueo
 
@@ -38,6 +45,28 @@ flowchart LR
 | Hagezi Pro | Publicidad, rastreo y telemetría |
 | Hagezi TIF | Threat intelligence: malware, phishing y C2 |
 | Hagezi DoH/VPN/Proxy bypass | Impedir la evasión del DNS mediante DoH |
+
+## Acceso
+
+Todo se maneja desde **homelab-portal** (puerto `8090`), que además comprueba que cada
+servicio responde. Se llega por la IP de casa o por Tailscale; no hay ningún puerto
+abierto a Internet.
+
+| Servicio | Desde casa | Por tailnet |
+|---|---|---|
+| Portal | `http://192.168.1.20:8090` | `http://100.114.119.53:8090` |
+| Grafana | `http://192.168.1.20:3000` | `http://100.114.119.53:3000` |
+| Pi-hole | `https://192.168.1.20:443/admin` | `https://100.114.119.53:443/admin` |
+| Portainer | `https://192.168.1.20:9443` | `https://100.114.119.53:9443` |
+| websec-scanner | `http://192.168.1.20:8001` | `http://100.114.119.53:8001` |
+| Prometheus | solo `127.0.0.1:9090` en la Pi | — |
+
+Prometheus y Unbound escuchan **solo en loopback**: los sondea el portal desde el host y
+no se exponen. Para consultar la interfaz de diagnóstico de Prometheus sin tocar la
+configuración: `ssh -N -L 9090:127.0.0.1:9090 pi@192.168.1.20`.
+
+> Pi-hole y Portainer usan **certificados autofirmados**: el navegador avisará una vez
+> por servicio. Es esperable en un homelab.
 
 ## Hallazgos documentados
 
@@ -57,6 +86,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 ## Runbooks
 
 - [Verificación del filtrado DNS por dispositivo](docs/runbooks/verificacion-dns.md)
+- [homelab-portal: catálogo de servicios, endpoints de API y sondas](apps/homelab-portal/README.md)
 
 ## Competencias demostradas
 
@@ -80,6 +110,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 - [ ] Migración del sistema a SSD
 - [x] Detección y respuesta: CrowdSec
 - [x] Métricas: Prometheus + node-exporter + Grafana
+- [x] Catálogo de servicios con estado de salud (homelab-portal)
 - [ ] Logs: Loki + Grafana Alloy (mini-SIEM)
 - [ ] Segmentación de red con VLANs (IoT / invitados / confianza)
 
@@ -87,7 +118,7 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 
 ```
 stacks/        Docker Compose de cada servicio (sin secretos)
-apps/          Aplicaciones propias (websec-scanner)
+apps/          Aplicaciones propias (websec-scanner, homelab-portal)
 host/          Configuración del sistema operativo del host
 scripts/       Utilidades de operación
 subir.ps1      Publicación en GitHub con control de secretos
