@@ -30,10 +30,12 @@ services:
 
   - name: Pi-hole
     description: "Sinkhole DNS: publicidad, rastreo y amenazas"
-    port: 80
+    scheme: https            # certificado autofirmado (CN=pi.hole)
+    port: 443
+    path: "/admin"           # la raíz devuelve 403: el panel vive en /admin
     icon: "🛡️"
     stack: dns
-    health: { type: http, path: /admin/ }
+    health: { type: http, path: /admin/, verify: false }
     tags: [dns, filtrado, privacidad]
     apis:
       - path: "/api/stats/summary"
@@ -45,10 +47,11 @@ services:
 
   - name: Portainer
     description: Gestión de contenedores
+    scheme: https            # rechaza el claro con HTTP 400
     port: 9443
     icon: "🐳"
     stack: docker
-    health: { type: tcp }
+    health: { type: tcp }    # no se comprueba por HTTP: el certificado es autofirmado
     tags: [docker, contenedores, despliegue]
     apis:
       - path: "/api/endpoints"

@@ -87,7 +87,11 @@ def servicios(destino: str = "tailnet") -> list[dict[str, Any]]:
         host = _host_de_servicio(svc, red, destino)
         item["destino"] = destino
         item["host"] = host
-        item["url"] = f"http://{host}:{svc['port']}{svc.get('path', '')}"
+        # El esquema NO es siempre http: Portainer rechaza el claro con 400 y obliga a
+        # TLS, y Pi-hole sirve el panel en /admin (la raíz devuelve 403).
+        scheme = svc.get("scheme", "http")
+        item["scheme"] = scheme
+        item["url"] = f"{scheme}://{host}:{svc['port']}{svc.get('path', '')}"
         # Con host propio (loopback) el enlace solo abre desde la propia Pi: no se muestra
         # en destino LAN, y en tailnet se avisa.
         item["solo_destino"] = bool(svc.get("host"))

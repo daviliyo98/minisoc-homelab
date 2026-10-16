@@ -42,13 +42,17 @@ def _a_loopback(url: str) -> str:
     return url
 
 
-async def _sonda_http(url: str, path: str, esperado: Any) -> dict[str, Any]:
+async def _sonda_http(url: str, path: str, esperado: Any, verificar: bool = True) -> dict[str, Any]:
     destino = _a_loopback(url.rstrip("/") + path)
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(SEMILLA_TIMEOUT, read=TIMEOUT),
             follow_redirects=True,
             trust_env=False,  # no heredamos proxies ni certificados del host
+            # verify=False solo para los servicios marcados tls_verify: false en el
+            # catálogo: Portainer y Pi-hole usan certificado autofirmado y la validación
+            # estricta los declararía caídos cuando están perfectamente sanos.
+            verify=verificar,
         ) as cliente:
             r = await cliente.get(destino)
         ok = r.status_code == esperado
@@ -91,7 +95,12 @@ async def comprobar(servicio: dict[str, Any], usar_cache: bool = True) -> dict[s
             return {**previo[1], "cacheado": True}
 
     if tipo == "http":
-        r = await _sonda_http(servicio["url"], cfg.get("path", "/"), cfg.get("expect", 200))
+        r = await _sonda_http(
+            servicio["url"],
+            cfg.get("path", "/"),
+            cfg.get("expect", 200),
+            cfg.get("verify", True),
+        )
     else:
         r = await _sonda_tcp(servicio["url"])
 

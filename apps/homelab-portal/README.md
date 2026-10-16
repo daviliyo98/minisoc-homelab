@@ -50,8 +50,11 @@ que cambia el `mtime` del fichero.
 | Clave | Para qué |
 |---|---|
 | `port` | obligatorio; el portal compone la URL a partir del host y este número |
+| `scheme` | `http` (por defecto) o `https`. **No siempre es `http`**: Portainer devuelve `400` si le hablas en claro |
+| `path` | subruta. Necesaria en Pi-hole, cuyo panel está en `/admin` (la raíz da `403`) |
 | `health.type` | `http` · `tcp` · `none` |
 | `health.expect` | código esperado si el de por defecto (200) no vale |
+| `health.verify` | `false` si el servicio usa certificado autofirmado; si no, la sonda lo daría por caído |
 | `host` | solo si el servicio **no** está en la IP de la Pi (Prometheus, en `127.0.0.1`) |
 | `apis` | endpoints que se listan en la tarjeta, con la nota de autenticación |
 
