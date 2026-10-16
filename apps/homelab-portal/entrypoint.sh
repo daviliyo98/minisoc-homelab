@@ -13,10 +13,13 @@ if [ -z "${PORTAL_PASSWORD:-}" ]; then
   echo "[entrypoint]         Aceptable solo si es accesible únicamente por el tailnet." >&2
 fi
 
-# En red host, atar a 0.0.0.0 pondría el portal a tiro de anyone de la LAN. Por eso
-# se ata a la IP del tailnet: desde casa se sigue entrando igual por Tailscale.
-BIND_HOST="${BIND_HOST:-100.114.119.53}"
-BIND_PORT="${BIND_PORT:-8080}"
-echo "[entrypoint] Escuchando en http://${BIND_HOST}:${BIND_PORT} (solo tailnet, no 0.0.0.0)"
+# Interfaz de escucha. 0.0.0.0 = LAN + tailnet (lo protege la clave de .env).
+# Fijarlo a una IP concreta lo deja accesible solo por esa vía: p.ej. la del tailnet
+# para no exponer el catálogo en la LAN.
+# No se usa el 8080: crowdsec ya ocupa 127.0.0.1:8080 en el host, y atar a
+# 0.0.0.0:8080 falla con EADDRINUSE ("address already in use").
+BIND_HOST="${BIND_HOST:-0.0.0.0}"
+BIND_PORT="${BIND_PORT:-8090}"
+echo "[entrypoint] Escuchando en http://${BIND_HOST}:${BIND_PORT} (host=${BIND_HOST})"
 
 exec uvicorn app.main:app --host "$BIND_HOST" --port "$BIND_PORT" --no-server-header

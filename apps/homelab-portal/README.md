@@ -26,7 +26,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Acceso: `http://100.114.119.53:8080` (solo por Tailscale).
+Acceso: `http://192.168.1.20:8090` en casa, `http://100.114.119.53:8090` por tailnet.
 
 ## Añadir un servicio
 
@@ -37,7 +37,7 @@ que cambia el `mtime` del fichero.
 ```yaml
   - name: Mi servicio
     description: Qué hace
-    port: 8080
+    port: 3000
     icon: "🔧"
     stack: utilidades
     health: { type: http, path: /health }   # http | tcp | none
@@ -65,13 +65,13 @@ Pensada para scripts, no para el navegador:
 
 ```bash
 # catálogo completo, con estado
-curl -s -u admin:CLAVE http://100.114.119.53:8080/api/services | jq '.servicios[].name'
+curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services | jq '.servicios[].name'
 
 # instantáneo, sin sondear (para un cron que no debe depender de otros servicios)
-curl -s -u admin:CLAVE 'http://100.114.119.53:8080/api/services?salud=false'
+curl -s -u admin:CLAVE 'http://100.114.119.53:8090/api/services?salud=false'
 
 # solo los que están caídos
-curl -s -u admin:CLAVE http://100.114.119.53:8080/api/services \
+curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services \
   | jq -r '.servicios[] | select(.salud.ok == false) | .name'
 ```
 
@@ -89,9 +89,11 @@ Prometheus y Unbound escuchan en el **loopback del host** (`127.0.0.1:9090` y
 alcanza ni por `host.docker.internal` (que resuelve a `172.17.0.1`) ni por el propio
 `127.0.0.1` del contenedor. Se comprobó: `Connection refused` por ambos caminos.
 
-En red host el portal sí llega a todo eso. Para que eso no lo abra a la LAN,
-`entrypoint.sh` ata uvicorn **a la IP del tailnet**, nunca a `0.0.0.0`. Verificado:
-`192.168.1.20:8080` da conexión rechazada.
+En red host el portal sí llega a todo eso. En red host no hay `ports:`: la exposición la
+controla uvicorn con `BIND_HOST` (por defecto `0.0.0.0`, o sea LAN + tailnet).
+
+Ojo con una trampa: `crowdsec` ya ocupa `127.0.0.1:8080` en el host. Si fijaras
+`BIND_HOST=127.0.0.1` habría conflicto de puerto.
 
 ## Sondas: por qué hay caché
 
@@ -103,8 +105,9 @@ midiendo en la concurrencia provocaba el falso positivo.
 
 ## Seguridad
 
-- **Solo tailnet**: uvicorn ata a `100.114.119.53`, no a `0.0.0.0`. No es visible ni
-  desde la LAN ni desde internet (CGNAT).
+- **Accesible por la LAN y por el tailnet**: `http://192.168.1.20:8090` y
+  `http://100.114.119.53:8090`. Lo protege la contraseña, no la red. Fijando
+  `BIND_HOST` a una IP concreta se restringe a esa vía.
 - **HTTP básico** con clave en `.env`. Si se deja vacía, el portal **arranca sin
   autenticar y lo avisa por log**.
 - `read_only`, `cap_drop: ALL`, `no-new-privileges`, usuario no root (UID 10001).
@@ -116,7 +119,8 @@ midiendo en la concurrencia provocaba el falso positivo.
 
 - Las sondas corren **en paralelo** (`asyncio.gather`): en secuencial la página tarda
   lo que el servicio más lento.
-- `crowdsec` ya ocupa `127.0.0.1:8080` en el host. El portal ata a la IP del tailnet,
-  así que no chocan, pero si cambias `BIND_HOST` a `127.0.0.1` habrá conflicto.
+- `crowdsec` ya ocupa `127.0.0.1:8080` en el host, y por eso el portal usa el
+  `8090`: atar a `0.0.0.0:8080` falla con `address already in use`. No pongas
+  `BIND_PORT=8080` sin mover antes crowdsec.
 - Si Tailscale reasigna la IP del nodo, hay que actualizar `BIND_HOST` en `compose.yaml`
   y reconstruir (el `environment` está en la imagen, no en un volumen).

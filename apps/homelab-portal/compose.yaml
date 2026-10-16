@@ -3,8 +3,10 @@
 # Red host (network_mode: host) por un motivo concreto: Prometheus y Unbound escuchan
 # en el LOOPBACK del host (127.0.0.1:9090 y 127.0.0.1:5335), y el loopback del host
 # está aislado del de los contenedores: ni por host.docker.internal ni por su propio
-# 127.0.0.1 se llegan. En red host sí. Para que eso no abra el portal a la LAN,
-# el entrypoint ata uvicorn SOLO a la IP del tailnet (ver BIND_HOST), no a 0.0.0.0.
+# 127.0.0.1 se llegan. En red host sí.
+#
+# OJO: en red host no hay `ports:`; la exposición la controla uvicorn (BIND_HOST).
+# Con 0.0.0.0 el portal queda en la LAN y en el tailnet, y solo lo protege la clave.
 services:
   homelab-portal:
     build: .
@@ -13,9 +15,14 @@ services:
     environment:
       PORTAL_USER: "${PORTAL_USER:-admin}"
       PORTAL_PASSWORD: "${PORTAL_PASSWORD:-}"
-      # IP del tailnet de la Pi. Cambiar aquí si algún día Tailscale reasigna la IP.
-      BIND_HOST: "${BIND_HOST:-100.114.119.53}"
-      BIND_PORT: "${BIND_PORT:-8080}"
+      # Escucha en todas las interfaces: accesible por la IP de casa y por el tailnet.
+      # La protección es la contraseña de PORTAL_PASSWORD. Poner aquí una IP concreta
+      # (p.ej. 100.114.119.53) lo restringiría a esa sola vía.
+      BIND_HOST: "${BIND_HOST:-0.0.0.0}"
+      # OJO: el 8080 NO sirve en red host con 0.0.0.0. crowdsec ya ocupa
+      # 127.0.0.1:8080 en el host y atar a 0.0.0.0:8080 falla con EADDRINUSE.
+      # Por eso el 8090.
+      BIND_PORT: "${BIND_PORT:-8090}"
       # Caducidad de la caché de sondas. El portal se mide a sí mismo: con las cinco
       # sondas simultáneas, Grafana llegó a devolver 503 en la microSD. Ver app/health.py.
       PORTAL_HEALTH_TTL: "${PORTAL_HEALTH_TTL:-20}"
