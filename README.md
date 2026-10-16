@@ -151,7 +151,8 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 
 - [x] Filtrado DNS con Pi-hole + Unbound + DNSSEC
 - [x] Parcheo del sistema y limpieza
-- [x] Backups verificados de Pi-hole y Portainer
+- [x] Copias de seguridad verificadas y programadas (repo, .env, etc-pihole,
+      volúmenes Docker y configuración de host; diario a las 04:30)
 - [ ] Cerrar la fuga IPv6 en toda la red (router neutro con OpenWrt/OPNsense)
 - [x] Parches automáticos con ventana de mantenimiento (`unattended-upgrades`, reinicio a las 04:00)
 - [x] Acceso remoto Zero Trust con Tailscale (sin puertos abiertos a Internet)
