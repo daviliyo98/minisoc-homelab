@@ -1,0 +1,88 @@
+# MINISOC - Catálogo del portal.
+#
+# El portal NO duplica URLs: guarda el puerto y compone el enlace según el destino.
+# Motivo: la IP pública es CGNAT (188.26.198.148) y el router no reenvía puertos, así
+# que desde fuera de casa solo se llega por Tailscale. Hardcodear dos URLs por servicio
+# garantiza que una de las dos se queda obsoleta sin que nadie se entere.
+#
+# Añadir un servicio = añadir un bloque aquí. No hay que tocar código.
+
+red:
+  lan: "192.168.1.20"         # dirección en casa
+  tailnet: "100.114.119.53"   # Tailscale; alcanzable desde fuera con la VPN puesta
+
+# El portal corre en red host (ver compose.yaml), así que alcanza el loopback del
+# host y por tanto todo lo que publica solo en 127.0.0.1: Prometheus, Unbound, etc.
+
+services:
+  - name: Grafana
+    description: Dashboards, alertas y línea base del host
+    port: 3000
+    icon: "📈"
+    stack: monitoring
+    health: { type: http, path: /api/health }
+    tags: [métricas, dashboards, alertas]
+    apis:
+      - path: "/api/health"
+        note: "Sin autenticación"
+      - path: "/api/datasources"
+        note: "Exige cabecera Authorization: Bearer $GRAFANA_PASSWORD"
+
+  - name: Pi-hole
+    description: "Sinkhole DNS: publicidad, rastreo y amenazas"
+    port: 80
+    icon: "🛡️"
+    stack: dns
+    health: { type: http, path: /admin/ }
+    tags: [dns, filtrado, privacidad]
+    apis:
+      - path: "/api/stats/summary"
+        note: "Requiere ?auth= o cabecera X-FTL; clave en $PIHOLE_PASSWORD"
+      - path: "/api/queries/table?length=100"
+        note: "Últimas consultas"
+      - path: "/api/network/table"
+        note: "Dispositivos y consultas por cliente"
+
+  - name: Portainer
+    description: Gestión de contenedores
+    port: 9443
+    icon: "🐳"
+    stack: docker
+    health: { type: tcp }
+    tags: [docker, contenedores, despliegue]
+    apis:
+      - path: "/api/endpoints"
+        note: "Autenticación con JWT; útil para automatizar despliegues"
+
+  - name: websec-scanner
+    description: Analizador de postura de seguridad web (pasivo por defecto)
+    port: 8001
+    icon: "🔎"
+    stack: seguridad
+    health: { type: http, path: /health }
+    tags: [seguridad, tls, web, pentest]
+    apis:
+      - path: "/health"
+        note: "Sin autenticación"
+      - path: "/scan"
+        note: "POST; cabecera x-api-key con $API_KEY"
+      - path: "/scan-status/{job_id}"
+        note: "Estado de un escaneo en curso"
+      - path: "/whoami"
+        note: "Verifica el rol de la clave enviada"
+      - path: "/metrics"
+        note: "Métricas Prometheus; exige $METRICS_TOKEN"
+
+  - name: Prometheus
+    description: Métricas del host; origen de los datos de Grafana
+    host: "127.0.0.1"        # publicado solo en el loopback del host (el portal va en red host)
+    port: 9090
+    icon: "⏱️"
+    stack: monitoring
+    health: { type: http, path: /-/healthy }
+    tags: [métricas, series temporales]
+    apis:
+      - path: "/api/v1/query?query=up"
+        note: "API PromQL; prometheus_container_cpu_usage_seconds_total"
+      - path: "/api/v1/targets"
+        note: "Estado de los objetivos vigilados"

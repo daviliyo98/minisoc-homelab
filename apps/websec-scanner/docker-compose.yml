@@ -28,7 +28,7 @@ services:
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
       METRICS_TOKEN: "${METRICS_TOKEN:-}"
     ports:
-      - "192.168.1.20:8001:8000"   # accesible solo desde tu red, puerto 8001
+      - "0.0.0.0:8001:8000"   # LAN + tailnet (Tailscale); el API_KEY protege la API
     read_only: true                # sistema de archivos de solo lectura
     tmpfs:
       - /tmp

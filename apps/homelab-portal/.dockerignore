@@ -1,0 +1,11 @@
+# .env y el catálogo nunca dentro de la imagen: el primero son credenciales y el
+# segundo se cambia sin reconstruir.
+.env
+.env.example
+services.yaml
+tests/
+pytest.ini
+**/__pycache__
+.git
+.gitignore
+README.md

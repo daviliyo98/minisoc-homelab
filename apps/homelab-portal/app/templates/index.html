@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal MINISOC</title>
+  <link rel="stylesheet" href="/static/portal.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>">
+</head>
+<body>
+<header>
+  <div class="titulo">
+    <h1>🛰️ Portal MINISOC</h1>
+    <p class="sub">Catálogo de servicios del homelab · Raspberry Pi 4 · {{ red.get("lan", "?") }}</p>
+  </div>
+
+  <form class="controles" method="get" action="/">
+    <input type="search" name="q" value="{{ q }}" placeholder="Buscar servicio, tag o descripción…"
+           autocomplete="off" spellcheck="false">
+
+    <select name="stack" onchange="this.form.submit()">
+      <option value="">Todos los stacks</option>
+      {% for s in stacks %}
+        <option value="{{ s }}" {% if stack == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+
+    <!-- El destino cambia lo que significa cada enlace: en LAN es la IP de casa,
+         por tailnet la IP de Tailscale, que sí funciona desde fuera. -->
+    <div class="conmutador" role="group" aria-label="Destino de los enlaces">
+      <a href="/?destino=lan&q={{ q|urlencode }}&stack={{ stack|urlencode }}"
+         class="{{ 'activo' if destino == 'lan' }}">LAN</a>
+      <a href="/?destino=tailnet&q={{ q|urlencode }}&stack={{ stack|urlencode }}"
+         class="{{ 'activo' if destino == 'tailnet' }}">Tailnet</a>
+    </div>
+
+    <button type="submit">Filtrar</button>
+  </form>
+</header>
+
+{% if sin_clave %}
+  <p class="aviso">⚠️ Sin <code>PORTAL_PASSWORD</code>: el portal NO pide credenciales.
+     Está bien si solo es accesible por el tailnet, pero no lo expongas así.</p>
+{% endif %}
+
+<main>
+  {% if not servicios %}
+    <p class="vacio">Ningún servicio coincide con el filtro.</p>
+  {% endif %}
+
+  <div class="rejilla">
+    {% for s in servicios %}
+      {% set e = estados.get(s.name, {}) %}
+      <article class="tarjeta estado-{{ e.get('estado', 'nd') }}">
+
+        <div class="cabecera">
+          <span class="icono">{{ s.icon }}</span>
+          <div>
+            <h2>{{ s.name }}</h2>
+            <span class="pila">{{ s.get("stack", "") }}</span>
+          </div>
+          <span class="luz" title="{{ e.get('detalle', 'sin sonda') }}">
+            {% if e.get('estado') == 'ok' %}● Operational
+            {% elif e.get('estado') == 'error' %}● Caído
+            {% else %}● n/d{% endif %}
+          </span>
+        </div>
+
+        <p class="desc">{{ s.description }}</p>
+
+        <a class="boton" href="{{ s.url }}" target="_blank" rel="noopener">
+          Abrir ↗<span class="url">{{ s.url }}</span>
+        </a>
+
+        {% if e.get('ms') is not none %}
+          <span class="latencia">{{ e.ms }} ms</span>
+        {% endif %}
+
+        {% if s.get('solo_destino') %}
+          <p class="nota">Solo accesible dentro de Docker (loopback del host).</p>
+        {% endif %}
+
+        {% if s.get('apis') %}
+          <details>
+            <summary>API · {{ s.apis|length }} endpoint{{ 's' if s.apis|length != 1 }}</summary>
+            <ul class="apis">
+              {% for a in s.apis %}
+                <li>
+                  <code>{{ a.path }}</code>
+                  {% if a.note %}<span class="nota">{{ a.note }}</span>{% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+
+        {% if s.get('tags') %}
+          <div class="tags">
+            {% for t in s.tags %}<span>{{ t }}</span>{% endfor %}
+          </div>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+</main>
+
+<footer>
+  <span>{{ servicios|length }} de {{ total }} servicios · enlaces por {{ destino }}</span>
+  <span>estado consultado a las {{ generado }}</span>
+  <a href="/api/services" target="_blank" rel="noopener">JSON</a> ·
+  <a href="/api/docs" target="_blank" rel="noopener">OpenAPI</a> ·
+  <a href="/healthz" target="_blank" rel="noopener">healthz</a>
+</footer>
+</body>
+</html>
