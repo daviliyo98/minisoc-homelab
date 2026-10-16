@@ -19,10 +19,10 @@ flowchart LR
     CS -->|métricas 172.17.0.1:6060| PR
     PO[homelab-portal] -->|sonda HTTP/TCP| P
     PO --> G
-    PO --> W["websec-scanner"]
+    PO --> W[websec-scanner]
     PO --> PT
-    PO -. solo 127.0.0.1 .-> PR
-    TS["Tailscale<br/>sin puertos abiertos"] --> PO
+    PO -. "127.0.0.1" .-> PR
+    TS[Tailscale<br/>sin puertos abiertos] --> PO
 ```
 
 | Componente | Función | Estado |
