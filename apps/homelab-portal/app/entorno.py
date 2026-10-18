@@ -65,12 +65,26 @@ _estado: dict[str, dict[str, Any]] = {
 }
 
 
+# Variables de entorno (.env, fuera del repo) para lo que no debe publicarse:
+# las coordenadas de casa. Tienen prioridad sobre services.yaml.
+_ENV = {"nombre": ("ENTORNO_NOMBRE", str), "lat": ("ENTORNO_LAT", float),
+        "lon": ("ENTORNO_LON", float), "radio_km": ("ENTORNO_RADIO_KM", float)}
+
+
 def config() -> dict[str, Any]:
     try:
         propia = catalog._cargar().get("entorno") or {}
     except catalog.CatalogoError:
         propia = {}
-    return {**POR_DEFECTO, **{k: v for k, v in propia.items() if v is not None}}
+    cfg = {**POR_DEFECTO, **{k: v for k, v in propia.items() if v is not None}}
+    for clave, (var, tipo) in _ENV.items():
+        valor = os.environ.get(var, "").strip()
+        if valor:
+            try:
+                cfg[clave] = tipo(valor)
+            except ValueError:
+                log.warning("%s no es válido (%r): se ignora", var, valor)
+    return cfg
 
 
 def estado() -> dict[str, Any]:

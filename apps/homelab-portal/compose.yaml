@@ -33,6 +33,12 @@ services:
       PORTAL_RETENCION_DIAS: "${PORTAL_RETENCION_DIAS:-7}"
       # Hora local sin instalar tzdata en la imagen slim: formato POSIX de Madrid.
       TZ: "${TZ_POSIX:-CET-1CEST,M3.5.0,M10.5.0/3}"
+      # Ubicación para la sección Entorno. Va en .env (no en services.yaml) porque
+      # son las coordenadas de casa y el repositorio es público. Vacías = Granada.
+      ENTORNO_NOMBRE: "${ENTORNO_NOMBRE:-}"
+      ENTORNO_LAT: "${ENTORNO_LAT:-}"
+      ENTORNO_LON: "${ENTORNO_LON:-}"
+      ENTORNO_RADIO_KM: "${ENTORNO_RADIO_KM:-}"
     dns:
       - 127.0.0.1     # en red host el resolver es el del host: su Pi-hole
     volumes:
