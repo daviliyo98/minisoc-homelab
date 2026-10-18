@@ -50,6 +50,28 @@
           <p class="tenue">Sensación de {{ d.sensacion }}°, humedad del {{ d.humedad }} %, viento a {{ d.viento }} km/h</p>
         </div>
       </div>
+      {% if d.horas %}
+        <div class="proximas">
+          <h3>Próximas {{ d.horas|length }} horas</h3>
+          {% set moja = d.horas|selectattr('lluvia', 'ge', 50)|list or d.horas|selectattr('mm', 'ge', 0.3)|list %}
+          <p class="resumen-horas {{ 'moja' if moja }}">{{ d.resumen_horas }}</p>
+          <ol class="horas" aria-label="Previsión hora a hora">
+            {% for h in d.horas %}
+              <li>
+                <span class="hora">{{ h.hora }}</span>
+                {{ icono(h.icono) }}
+                <span class="hora-temp">{{ h.temp }}°</span>
+                <dl class="hora-datos">
+                  <div><dt>Cielo</dt><dd>{{ h.texto }}</dd></div>
+                  <div><dt>Lluvia</dt><dd class="{{ 'alta' if (h.lluvia or 0) >= 50 }}">{{ h.lluvia }} %{% if h.mm %}, {{ h.mm|string|replace('.', ',') }} mm{% endif %}</dd></div>
+                  <div><dt>Viento</dt><dd>{{ h.viento }} km/h{% if h.rachas > h.viento + 10 %}, rachas de {{ h.rachas }}{% endif %}</dd></div>
+                  <div><dt>Sensación</dt><dd>{{ h.sensacion }}°</dd></div>
+                </dl>
+              </li>
+            {% endfor %}
+          </ol>
+        </div>
+      {% endif %}
       <ol class="dias" aria-label="Previsión de 7 días">
         {% for dia in d.dias %}
           <li {% if loop.first %}class="hoy"{% endif %}>

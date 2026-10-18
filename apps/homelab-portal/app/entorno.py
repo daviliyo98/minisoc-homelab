@@ -149,6 +149,7 @@ async def _tiempo(cliente: httpx.AsyncClient, cfg: dict[str, Any]) -> dict[str, 
         latitude=cfg["lat"], longitude=cfg["lon"], timezone="auto", forecast_days=7,
         current="temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation",
         daily="weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        hourly="temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
     ))
     c, d = j["current"], j["daily"]
     texto, icono = _wmo(c.get("weather_code"))
@@ -171,7 +172,46 @@ async def _tiempo(cliente: httpx.AsyncClient, cfg: dict[str, Any]) -> dict[str, 
         "viento": round(c.get("wind_speed_10m") or 0),
         "texto": texto, "icono": icono,
         "dias": dias,
+        "horas": (horas := _proximas_horas(j.get("hourly") or {}, c.get("time", ""))),
+        "resumen_horas": _resumen_lluvia(horas),
     }
+
+
+def _proximas_horas(h: dict[str, Any], ahora_local: str, n: int = 3) -> list[dict[str, Any]]:
+    """Las n horas siguientes a la actual. Las horas vienen en hora local (timezone=auto)."""
+    tiempos = h.get("time") or []
+    actual = ahora_local[:13]                      # "2026-10-19T01" -> la hora en curso
+    salida = []
+    for i, t in enumerate(tiempos):
+        if t[:13] <= actual:
+            continue
+        texto, icono = _wmo(h["weather_code"][i])
+        salida.append({
+            "hora": t[11:16],
+            "texto": texto, "icono": icono,
+            "temp": round(h["temperature_2m"][i]),
+            "sensacion": round(h["apparent_temperature"][i]),
+            "lluvia": h["precipitation_probability"][i],
+            "mm": round(h["precipitation"][i] or 0, 1),
+            "viento": round(h["wind_speed_10m"][i] or 0),
+            "rachas": round(h["wind_gusts_10m"][i] or 0),
+        })
+        if len(salida) == n:
+            break
+    return salida
+
+
+def _resumen_lluvia(horas: list[dict[str, Any]]) -> str:
+    """Una frase que responde a lo que se viene a mirar: ¿me mojo?"""
+    if not horas:
+        return ""
+    for h in horas:
+        if (h["lluvia"] or 0) >= 50 or h["mm"] >= 0.3:
+            return f"{h['texto']} a partir de las {h['hora']} ({h['lluvia']} % de probabilidad)."
+    maximo = max(h["lluvia"] or 0 for h in horas)
+    if maximo >= 20:
+        return f"Posibles chubascos aislados ({maximo} % como mucho)."
+    return f"Sin lluvia prevista en las próximas {len(horas)} horas."
 
 
 async def _sismos(cliente: httpx.AsyncClient, cfg: dict[str, Any]) -> list[dict[str, Any]]:
