@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{% if caidos %}({{ caidos|length }}) {% endif %}{% block titulo %}{% endblock %} · MINISOC</title>
+  <link rel="preload" href="/static/fonts/Barlow-Medium.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="/static/portal.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231E2A3D'/><circle cx='16' cy='16' r='7' fill='{{ '%23FF7A70' if caidos else '%235BD69A' }}'/></svg>">
+  <script src="/static/portal.js" defer></script>
+</head>
+<body>
+<a class="saltar" href="#contenido">Saltar al contenido</a>
+
+{%- set n_apis = todos|map(attribute='apis')|select|map('length')|sum -%}
+<div class="app">
+  <aside class="lateral">
+    <a class="marca" href="/?destino={{ destino }}">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="2.5" y="8" width="27" height="16" rx="3"/>
+        <circle cx="9" cy="16" r="2.2" class="{{ 'mal' if caidos }}"/><circle cx="16" cy="16" r="2.2"/><circle cx="23" cy="16" r="2.2"/>
+      </svg>
+      <span>
+        <span class="marca-nombre">MINISOC</span>
+        <span class="marca-host">Raspberry Pi 4</span>
+      </span>
+    </a>
+
+    <nav class="menu" aria-label="Secciones">
+      <a href="/?destino={{ destino }}" {% if seccion == 'servicios' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="5" rx="1.5"/><rect x="3" y="11" width="14" height="5" rx="1.5"/></svg>
+        Servicios <span class="cuenta">{{ todos|length }}</span>
+      </a>
+      <a href="/alertas?destino={{ destino }}" {% if seccion == 'alertas' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5a4.5 4.5 0 0 0-4.5 4.5v3L4 14h12l-1.5-3V8A4.5 4.5 0 0 0 10 3.5Z"/><path d="M8.3 16.5a1.8 1.8 0 0 0 3.4 0"/></svg>
+        Alertas
+        {% if caidos %}<span class="cuenta mal" aria-label="{{ caidos|length }} caído{{ 's' if caidos|length != 1 }}">{{ caidos|length }}</span>{% endif %}
+      </a>
+      <a href="/apis?destino={{ destino }}" {% if seccion == 'apis' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 10l4 5M13 5l4 5-4 5"/></svg>
+        APIs <span class="cuenta">{{ n_apis }}</span>
+      </a>
+    </nav>
+
+    {% if stacks %}
+    <nav class="stacks" aria-label="Stacks">
+      <p class="grupo">Stacks</p>
+      {% for s in stacks %}
+        {% set n = todos|selectattr('stack', 'equalto', s)|list %}
+        {% set mal = n|selectattr('name', 'in', caidos)|list %}
+        <a href="/?destino={{ destino }}&stack={{ s|urlencode }}" {% if seccion == 'servicios' and stack == s %}aria-current="page"{% endif %}>
+          <span class="led-stack {{ 'mal' if mal }}" aria-hidden="true"></span>{{ s }}
+          <span class="cuenta">{{ n|length }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+
+    <div class="lateral-pie">
+      <p class="grupo" id="etq-destino">Abrir los enlaces por</p>
+      <div class="conmutador" role="group" aria-labelledby="etq-destino">
+        {% set aqui = request.url.path %}
+        <a href="{{ aqui }}?destino=lan&q={{ q|urlencode }}&stack={{ stack|urlencode }}&ver={{ ver }}"
+           {% if destino == 'lan' %}class="activo" aria-current="true"{% endif %}>LAN</a>
+        <a href="{{ aqui }}?destino=tailnet&q={{ q|urlencode }}&stack={{ stack|urlencode }}&ver={{ ver }}"
+           {% if destino == 'tailnet' %}class="activo" aria-current="true"{% endif %}>Tailnet</a>
+      </div>
+      <p class="ip">{{ red.get(destino, '?') }}</p>
+      <p class="tecnico">
+        <a href="/api/services" target="_blank" rel="noopener noreferrer">JSON</a>
+        <a href="/api/docs" target="_blank" rel="noopener noreferrer">OpenAPI</a>
+        <a href="/healthz" target="_blank" rel="noopener noreferrer">healthz</a>
+      </p>
+    </div>
+  </aside>
+
+  <div class="contenido" id="contenido">
+    {% if sin_clave %}
+      <p class="aviso" role="alert">El portal no pide contraseña porque falta <code>PORTAL_PASSWORD</code> en el <code>.env</code>.
+         Vale mientras solo se llegue por el tailnet; no lo publiques así.</p>
+    {% endif %}
+    {% block contenido %}{% endblock %}
+  </div>
+</div>
+</body>
+</html>

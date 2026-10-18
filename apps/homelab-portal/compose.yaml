@@ -26,10 +26,19 @@ services:
       # Caducidad de la caché de sondas. El portal se mide a sí mismo: con las cinco
       # sondas simultáneas, Grafana llegó a devolver 503 en la microSD. Ver app/health.py.
       PORTAL_HEALTH_TTL: "${PORTAL_HEALTH_TTL:-20}"
+      # Historial (app/history.py): una muestra por servicio cada PORTAL_POLL
+      # segundos, guardada PORTAL_RETENCION_DIAS días. Con 5 servicios y 7 días son
+      # ~50 000 filas: unos pocos MB en la microSD.
+      PORTAL_POLL: "${PORTAL_POLL:-60}"
+      PORTAL_RETENCION_DIAS: "${PORTAL_RETENCION_DIAS:-7}"
+      # Hora local sin instalar tzdata en la imagen slim: formato POSIX de Madrid.
+      TZ: "${TZ_POSIX:-CET-1CEST,M3.5.0,M10.5.0/3}"
     dns:
       - 127.0.0.1     # en red host el resolver es el del host: su Pi-hole
     volumes:
       - ./services.yaml:/app/services.yaml:ro   # el catálogo se edita sin reconstruir
+      # Único sitio escribible del contenedor (read_only: true): la SQLite del historial.
+      - portal-data:/data
     read_only: true
     tmpfs:
       - /tmp
@@ -39,3 +48,6 @@ services:
       - ALL
     mem_limit: 256m
     restart: unless-stopped
+
+volumes:
+  portal-data:

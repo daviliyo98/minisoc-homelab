@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block titulo %}APIs{% endblock %}
+
+{% block contenido %}
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>APIs</h1>
+  </div>
+  <p class="frescura">Endpoints de cada servicio, con la dirección completa por {{ destino }}. Las claves van en el <code>.env</code>, nunca aquí.</p>
+</header>
+
+<div class="pagina">
+  {% for s in con_api %}
+    {% set e = estados[s.name] %}
+    <section class="grupo-api estado-{{ e.clase }}" aria-labelledby="api-{{ loop.index }}">
+      <h2 id="api-{{ loop.index }}">
+        <span class="led" aria-hidden="true"></span>{{ s.name }}
+        <span class="grupo-base">{{ s.base }}</span>
+      </h2>
+      <table class="tabla">
+        <thead><tr><th scope="col">Ruta</th><th scope="col">Notas</th><th scope="col"><span class="solo-lector">Acciones</span></th></tr></thead>
+        <tbody>
+          {% for a in s.apis %}
+            <tr>
+              <td><code>{{ a.path }}</code></td>
+              <td class="tenue">{{ a.note or '—' }}</td>
+              <td class="der"><button type="button" class="boton-sec pequeno" data-copiar="{{ s.base }}{{ a.path }}"
+                      aria-label="Copiar {{ s.base }}{{ a.path }}">Copiar URL</button></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% else %}
+    <div class="vacio"><p class="vacio-titulo">Ningún servicio declara APIs.</p>
+      <p>Añade una lista <code>apis</code> al servicio en <code>services.yaml</code>.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}

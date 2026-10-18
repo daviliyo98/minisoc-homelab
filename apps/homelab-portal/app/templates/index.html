@@ -1,115 +1,164 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Portal MINISOC</title>
-  <link rel="stylesheet" href="/static/portal.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>">
-</head>
-<body>
-<header>
-  <div class="titulo">
-    <h1>🛰️ Portal MINISOC</h1>
-    <p class="sub">Catálogo de servicios del homelab · Raspberry Pi 4 · {{ red.get("lan", "?") }}</p>
+{% extends "base.html" %}
+{% block titulo %}Servicios{% endblock %}
+
+{% macro estado_txt(est) -%}
+  {%- if est == 'ok' %}En marcha{% elif est == 'error' %}Caído{% else %}Sin sonda{% endif -%}
+{%- endmacro %}
+
+{% block contenido %}
+{% set base_q = '/?destino=' ~ destino ~ '&q=' ~ (q|urlencode) ~ '&stack=' ~ (stack|urlencode) %}
+
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>Servicios{% if stack %} <span class="filtro-activo">en {{ stack }} <a href="/?destino={{ destino }}&q={{ q|urlencode }}&ver={{ ver }}" aria-label="Quitar el filtro de stack">×</a></span>{% endif %}</h1>
+    <nav class="vistas" aria-label="Filtrar por estado">
+      <a href="{{ base_q }}&ver=todos" {% if ver == 'todos' %}aria-current="true"{% endif %}>Todos <span>{{ total if not stack else todos|selectattr('stack','equalto',stack)|list|length }}</span></a>
+      <a href="{{ base_q }}&ver=caidos" {% if ver == 'caidos' %}aria-current="true"{% endif %} class="{{ 'hay' if caidos }}">Caídos <span>{{ caidos|length }}</span></a>
+    </nav>
+    <form class="buscar" method="get" action="/" role="search">
+      <input type="hidden" name="destino" value="{{ destino }}">
+      <input type="hidden" name="stack" value="{{ stack }}">
+      <input type="hidden" name="ver" value="{{ ver }}">
+      <label class="solo-lector" for="q">Buscar servicio</label>
+      <input id="q" type="search" name="q" value="{{ q }}" placeholder="Buscar por nombre o etiqueta"
+             autocomplete="off" spellcheck="false">
+      <button type="submit" class="solo-sin-js">Buscar</button>
+    </form>
   </div>
-
-  <form class="controles" method="get" action="/">
-    <input type="search" name="q" value="{{ q }}" placeholder="Buscar servicio, tag o descripción…"
-           autocomplete="off" spellcheck="false">
-
-    <select name="stack" onchange="this.form.submit()">
-      <option value="">Todos los stacks</option>
-      {% for s in stacks %}
-        <option value="{{ s }}" {% if stack == s %}selected{% endif %}>{{ s }}</option>
-      {% endfor %}
-    </select>
-
-    <!-- El destino cambia lo que significa cada enlace: en LAN es la IP de casa,
-         por tailnet la IP de Tailscale, que sí funciona desde fuera. -->
-    <div class="conmutador" role="group" aria-label="Destino de los enlaces">
-      <a href="/?destino=lan&q={{ q|urlencode }}&stack={{ stack|urlencode }}"
-         class="{{ 'activo' if destino == 'lan' }}">LAN</a>
-      <a href="/?destino=tailnet&q={{ q|urlencode }}&stack={{ stack|urlencode }}"
-         class="{{ 'activo' if destino == 'tailnet' }}">Tailnet</a>
-    </div>
-
-    <button type="submit">Filtrar</button>
-  </form>
+  <p class="frescura">Comprobado a las <time>{{ generado }}</time>.
+    <a href="{{ base_q }}&ver={{ ver }}{% if ficha %}&sel={{ ficha.s.name|urlencode }}{% endif %}">Comprobar de nuevo</a></p>
 </header>
 
-{% if sin_clave %}
-  <p class="aviso">⚠️ Sin <code>PORTAL_PASSWORD</code>: el portal NO pide credenciales.
-     Está bien si solo es accesible por el tailnet, pero no lo expongas así.</p>
-{% endif %}
+<div class="maestro-detalle">
+  <section class="lista" aria-label="Lista de servicios">
+    {% if servicios %}
+      <div class="fila fila-cabecera" aria-hidden="true">
+        <span></span><span>Puerto</span><span>Servicio</span><span>Stack</span><span>Dirección</span><span class="der">Latencia</span>
+      </div>
+      <ul>
+        {% for s in servicios %}
+          {% set e = estados[s.name] %}
+          <li>
+            <a class="fila estado-{{ e.clase }}" href="{{ base_q }}&ver={{ ver }}&sel={{ s.name|urlencode }}"
+               {% if ficha and ficha.s.name == s.name %}aria-current="true"{% endif %}>
+              <span class="led" aria-hidden="true"></span>
+              <span class="c-puerto">{{ s.port }}</span>
+              <span class="c-nombre"><b>{{ s.name }}</b><span class="solo-lector">, {{ estado_txt(e.clase) }}</span></span>
+              <span class="c-stack">{{ s.get('stack', '') }}</span>
+              <span class="c-url">{{ s.url }}</span>
+              <span class="c-ms der">
+                {%- if e.clase == 'error' %}sin respuesta{% elif e.ms is not none %}{{ e.ms }} ms{% else %}—{% endif -%}
+              </span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="vacio">
+        {% if ver == 'caidos' and not q %}
+          <p class="vacio-titulo">No hay nada caído.</p>
+          <p>Todos los servicios con sonda responden.</p>
+          <a href="{{ base_q }}&ver=todos">Ver todos los servicios</a>
+        {% else %}
+          <p class="vacio-titulo">Ningún servicio coincide.</p>
+          <p>Prueba con otro nombre o etiqueta.</p>
+          <a href="/?destino={{ destino }}">Quitar los filtros</a>
+        {% endif %}
+      </div>
+    {% endif %}
+  </section>
 
-<main>
-  {% if not servicios %}
-    <p class="vacio">Ningún servicio coincide con el filtro.</p>
+  {% if ficha %}
+  {% set s, e, d = ficha.s, ficha.e, ficha.dispo %}
+  <aside class="ficha estado-{{ e.clase }}" id="ficha" aria-labelledby="ficha-nombre">
+    <div class="ficha-cabecera">
+      <p class="ficha-puerto" aria-hidden="true">{{ s.port }}<span>{{ s.scheme }}</span></p>
+      <h2 id="ficha-nombre">{{ s.name }}</h2>
+      <p class="pastilla">
+        <span class="led" aria-hidden="true"></span>
+        {{ estado_txt(e.clase) }}
+        {%- if ficha.desde and e.clase != 'nd' %} desde las {{ ficha.desde|hora }}
+          <span class="pastilla-dura">({{ (ahora() - ficha.desde)|duracion }})</span>{% endif %}
+      </p>
+      <p class="ficha-desc">{{ s.description }}</p>
+    </div>
+
+    <div class="ficha-acciones">
+      <a class="boton" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">Abrir {{ s.name }}</a>
+      <button type="button" class="boton-sec" data-copiar="{{ s.url }}">Copiar dirección</button>
+    </div>
+    {% if s.get('solo_destino') %}
+      <p class="nota-alerta">Solo abre desde la propia Pi: escucha en el loopback del host.</p>
+    {% endif %}
+
+    <dl class="datos">
+      <div><dt>Dirección</dt><dd class="url">{{ s.url }}</dd></div>
+      <div><dt>Última sonda</dt><dd class="sonda">{{ e.detalle }}{% if e.ms is not none %}, {{ e.ms }} ms{% endif %}</dd></div>
+      <div><dt>Latencia media 24 h</dt><dd>{{ (d.ms_medio ~ ' ms') if d.ms_medio is not none else '—' }}</dd></div>
+      {% if s.get('stack') %}<div><dt>Stack</dt><dd><a href="/?destino={{ destino }}&stack={{ s.stack|urlencode }}">{{ s.stack }}</a></dd></div>{% endif %}
+    </dl>
+
+    <section class="bloque" aria-labelledby="t-dispo">
+      <div class="bloque-titulo">
+        <h3 id="t-dispo">Disponibilidad 24 h</h3>
+        {% if d.porcentaje is not none %}<p class="cifra">{{ d.porcentaje|string|replace('.', ',') }} %</p>{% endif %}
+      </div>
+      {% if e.clase == 'nd' %}
+        <p class="tenue">Este servicio no tiene sonda: añade <code>health</code> en <code>services.yaml</code> para medirlo.</p>
+      {% elif not historial %}
+        <p class="tenue">Historial desactivado: el portal no puede escribir en su volumen <code>/data</code>.</p>
+      {% elif not d.muestras %}
+        <p class="tenue">Aún no hay muestras. El portal guarda una por minuto desde que arranca.</p>
+      {% else %}
+        <ol class="barras" aria-label="Disponibilidad por hora, de hace 24 horas a ahora">
+          {% for p in d.franjas %}
+            <li class="{{ 'sin' if p is none else ('ok' if p >= 99 else ('mal' if p == 0 else 'parcial')) }}"
+                title="{{ 'Sin datos' if p is none else p ~ ' %' }} · hace {{ 24 - loop.index0 }} h">
+              <span class="solo-lector">Hace {{ 24 - loop.index0 }} h: {{ 'sin datos' if p is none else p ~ ' %' }}</span>
+            </li>
+          {% endfor %}
+        </ol>
+        <p class="barras-eje" aria-hidden="true"><span>hace 24 h</span><span>ahora</span></p>
+      {% endif %}
+    </section>
+
+    {% if historial and e.clase != 'nd' %}
+    <section class="bloque" aria-labelledby="t-act">
+      <h3 id="t-act">Actividad</h3>
+      {% if ficha.eventos %}
+        <ol class="actividad">
+          {% for ev in ficha.eventos %}
+            <li class="{{ 'ok' if ev.ok else 'mal' }}">
+              <span class="led" aria-hidden="true"></span>
+              <span>{{ 'Vuelve a responder' if ev.ok else 'Deja de responder' }}
+                <span class="tenue">{{ ev.ts|hora }}{% if not ev.ok and ev.detalle %}, {{ ev.detalle }}{% endif %}</span></span>
+            </li>
+          {% endfor %}
+        </ol>
+        <a class="mas" href="/alertas?destino={{ destino }}">Ver todas las alertas</a>
+      {% else %}
+        <p class="tenue">Sin cambios de estado registrados.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if s.get('apis') %}
+    <section class="bloque" aria-labelledby="t-api">
+      <h3 id="t-api">Endpoints de API</h3>
+      <ul class="apis">
+        {% for a in s.apis %}
+          <li><code>{{ a.path }}</code>{% if a.note %}<span class="nota">{{ a.note }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if s.get('tags') %}
+      <ul class="tags" aria-label="Etiquetas">
+        {% for t in s.tags %}<li><a href="/?destino={{ destino }}&q={{ t|urlencode }}">{{ t }}</a></li>{% endfor %}
+      </ul>
+    {% endif %}
+  </aside>
   {% endif %}
-
-  <div class="rejilla">
-    {% for s in servicios %}
-      {% set e = estados.get(s.name, {}) %}
-      <article class="tarjeta estado-{{ e.get('estado', 'nd') }}">
-
-        <div class="cabecera">
-          <span class="icono">{{ s.icon }}</span>
-          <div>
-            <h2>{{ s.name }}</h2>
-            <span class="pila">{{ s.get("stack", "") }}</span>
-          </div>
-          <span class="luz" title="{{ e.get('detalle', 'sin sonda') }}">
-            {% if e.get('estado') == 'ok' %}● Operational
-            {% elif e.get('estado') == 'error' %}● Caído
-            {% else %}● n/d{% endif %}
-          </span>
-        </div>
-
-        <p class="desc">{{ s.description }}</p>
-
-        <a class="boton" href="{{ s.url }}" target="_blank" rel="noopener">
-          Abrir ↗<span class="url">{{ s.url }}</span>
-        </a>
-
-        {% if e.get('ms') is not none %}
-          <span class="latencia">{{ e.ms }} ms</span>
-        {% endif %}
-
-        {% if s.get('solo_destino') %}
-          <p class="nota">Solo accesible dentro de Docker (loopback del host).</p>
-        {% endif %}
-
-        {% if s.get('apis') %}
-          <details>
-            <summary>API · {{ s.apis|length }} endpoint{{ 's' if s.apis|length != 1 }}</summary>
-            <ul class="apis">
-              {% for a in s.apis %}
-                <li>
-                  <code>{{ a.path }}</code>
-                  {% if a.note %}<span class="nota">{{ a.note }}</span>{% endif %}
-                </li>
-              {% endfor %}
-            </ul>
-          </details>
-        {% endif %}
-
-        {% if s.get('tags') %}
-          <div class="tags">
-            {% for t in s.tags %}<span>{{ t }}</span>{% endfor %}
-          </div>
-        {% endif %}
-      </article>
-    {% endfor %}
-  </div>
-</main>
-
-<footer>
-  <span>{{ servicios|length }} de {{ total }} servicios · enlaces por {{ destino }}</span>
-  <span>estado consultado a las {{ generado }}</span>
-  <a href="/api/services" target="_blank" rel="noopener">JSON</a> ·
-  <a href="/api/docs" target="_blank" rel="noopener">OpenAPI</a> ·
-  <a href="/healthz" target="_blank" rel="noopener">healthz</a>
-</footer>
-</body>
-</html>
+</div>
+{% endblock %}

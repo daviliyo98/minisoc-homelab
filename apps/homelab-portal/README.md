@@ -80,8 +80,11 @@ curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services \
 
 | Ruta | Para qué |
 |---|---|
-| `/` | Catálogo (HTML) |
+| `/` | Servicios (HTML): lista y ficha del servicio elegido (`?sel=Grafana`) |
+| `/alertas` | Registro de caídas y recuperaciones de los últimos días |
+| `/apis` | Todos los endpoints de API del catálogo, con la URL completa |
 | `/api/services` | Catálogo en JSON, con sondas opcionales |
+| `/api/eventos` | Cambios de estado en JSON (`?servicio=`, `?limite=`) |
 | `/api/config` | Chequeo de configuración del despliegue |
 | `/healthz` | Salud del propio portal |
 
@@ -106,6 +109,22 @@ el servicio observado**: Grafana devolvió `503` con las cinco sondas simultáne
 `200` en 24/24 sondeos seguidos. No estaba caído, estaba saturado; el propio portal se
 midiendo en la concurrencia provocaba el falso positivo.
 
+## Historial: disponibilidad y alertas
+
+Un muestreador en segundo plano (`app/history.py`) sondea todos los servicios cada
+`PORTAL_POLL` segundos (60 por defecto) **haya o no alguien mirando el portal**, y lo
+guarda en una SQLite en el volumen `portal-data` (`/data/portal.db`). Si el dato
+dependiera de cuándo abres la página, una caída de madrugada no existiría.
+
+- `sondas`: una fila por servicio y muestra. Alimenta la barra de **disponibilidad 24 h**.
+- `eventos`: una fila solo cuando un servicio **cambia** de estado. Alimenta
+  "Caído desde las 21:06" y la página de Alertas.
+- Se purga lo anterior a `PORTAL_RETENCION_DIAS` (7 por defecto): unos pocos MB.
+- Si `/data` no es escribible, el portal sigue funcionando sin historial y lo dice.
+
+`/api/eventos` sirve para enganchar un aviso (Telegram, ntfy) o mandar los cambios a
+un SIEM sin tocar el portal.
+
 ## Seguridad
 
 - **Accesible por la LAN y por el tailnet**: `http://192.168.1.20:8090` y
@@ -117,6 +136,14 @@ midiendo en la concurrencia provocaba el falso positivo.
 - `mem_limit: 256m` — ojo: **este kernel no soporta límites de memoria en contenedores**
   y Docker lo descarta con un aviso. Es una limitación del host, no del compose.
 - Catálogo montado en solo lectura: el contenedor no puede reescribir su propia config.
+- **Cabeceras**: CSP estricta (`script-src 'self'`, sin scripts en línea; todo el
+  CSS, JS y las fuentes se sirven desde el propio portal), `X-Frame-Options: DENY`
+  contra clickjacking, `nosniff` y `Referrer-Policy: no-referrer`. `/api/docs` queda
+  fuera de la CSP porque Swagger carga recursos de un CDN.
+- **Credenciales comparadas en tiempo constante** (`secrets.compare_digest`): con `==`
+  el tiempo de respuesta revela cuántos caracteres de la clave son correctos.
+- Fuentes Barlow (licencia OFL, en `app/static/fonts/`) autoalojadas: el portal no
+  depende de internet ni filtra visitas a Google Fonts.
 
 ## Notas de operación
 
