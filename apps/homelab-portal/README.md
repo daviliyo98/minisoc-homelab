@@ -137,16 +137,24 @@ un SIEM sin tocar el portal.
 | Terremotos en un radio | [EMSC / seismicportal.eu](https://www.seismicportal.eu) (incluye datos del IGN) |
 | Noticias | RSS; por defecto Google News de la ciudad |
 
-La ubicación por defecto es Granada a nivel de ciudad. Se cambia sin reconstruir
-añadiendo a `services.yaml`:
+La ubicación por defecto es Granada a nivel de ciudad. **Las coordenadas de casa van
+en el `.env`, nunca en `services.yaml`**: el repositorio es público y el `.env` está
+en `.gitignore`.
+
+```bash
+# apps/homelab-portal/.env
+ENTORNO_NOMBRE=Granada
+ENTORNO_LAT=37.18
+ENTORNO_LON=-3.60
+ENTORNO_RADIO_KM=150
+```
+
+Tras cambiarlo: `docker compose up -d` (recrea el contenedor con las variables nuevas).
+El resto de opciones, que no son sensibles, pueden ir en `services.yaml`:
 
 ```yaml
 entorno:
-  nombre: Granada
-  lat: 37.1773
-  lon: -3.5986
-  radio_km: 150          # terremotos a menos de esta distancia
-  dias_sismos: 7
+  dias_sismos: 7         # terremotos de los últimos N días
   noticias:              # opcional: tus propios RSS en vez de Google News
     - https://www.ideal.es/rss/2.0/?section=granada
 ```
