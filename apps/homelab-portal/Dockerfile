@@ -10,6 +10,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+
+# /data para la SQLite del historial. Se crea aquí con el dueño correcto porque un
+# volumen con nombre copia los permisos de la imagen la primera vez que se monta.
+RUN mkdir -p /data && chown portal:portal /data
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

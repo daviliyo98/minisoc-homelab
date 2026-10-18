@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block titulo %}Alertas{% endblock %}
+
+{% block contenido %}
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>Alertas</h1>
+  </div>
+  <p class="frescura">Cambios de estado de los últimos {{ retencion }} días. El portal comprueba cada servicio cada {{ intervalo }} s.</p>
+</header>
+
+<div class="pagina">
+  {% if caidos %}
+    <section class="ahora" aria-labelledby="t-ahora">
+      <h2 id="t-ahora">Caído ahora</h2>
+      <ul>
+        {% for n in caidos %}
+          <li><a href="/?destino={{ destino }}&sel={{ n|urlencode }}"><span class="led" aria-hidden="true"></span>{{ n }}</a>
+              <span class="tenue">{{ estados[n].detalle }}</span></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if not historial %}
+    <div class="vacio">
+      <p class="vacio-titulo">El historial está desactivado.</p>
+      <p>El portal no puede escribir en <code>/data</code>. Revisa el volumen <code>portal-data</code> en <code>compose.yaml</code>.</p>
+    </div>
+  {% elif not eventos %}
+    <div class="vacio">
+      <p class="vacio-titulo">Sin cambios de estado.</p>
+      <p>Aquí aparecerá cada caída y cada recuperación en cuanto ocurra.</p>
+    </div>
+  {% else %}
+    <table class="tabla">
+      <caption class="solo-lector">Cambios de estado, del más reciente al más antiguo</caption>
+      <thead>
+        <tr><th scope="col">Cuándo</th><th scope="col">Servicio</th><th scope="col">Cambio</th><th scope="col">Motivo</th><th scope="col" class="der">Duró</th></tr>
+      </thead>
+      <tbody>
+        {% for ev in eventos %}
+          <tr class="{{ 'ok' if ev.ok else 'mal' }}">
+            <td class="cuando">{{ ev.ts|hora }}</td>
+            <td><a href="/?destino={{ destino }}&sel={{ ev.servicio|urlencode }}">{{ ev.servicio }}</a></td>
+            <td><span class="cambio"><span class="led" aria-hidden="true"></span>{{ 'Vuelve' if ev.ok else 'Cae' }}</span></td>
+            <td class="tenue">{{ '—' if ev.ok else (ev.detalle or '—') }}</td>
+            <td class="der">
+              {%- if ev.vigente -%}<span class="vigente">{{ 'sigue en marcha' if ev.ok else 'sigue caído' }}</span>
+              {%- else -%}{{ ev.dura|duracion }}{%- endif -%}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="pie-tabla tenue">También en JSON en <a href="/api/eventos" target="_blank" rel="noopener noreferrer">/api/eventos</a>, para un script de avisos o un SIEM.</p>
+  {% endif %}
+</div>
+{% endblock %}
