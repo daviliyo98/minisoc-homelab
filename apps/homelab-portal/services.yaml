@@ -89,3 +89,14 @@ services:
         note: "API PromQL; prometheus_container_cpu_usage_seconds_total"
       - path: "/api/v1/targets"
         note: "Estado de los objetivos vigilados"
+
+  - name: Home Assistant
+    description: Control de los aparatos de casa (robot Xiaomi, Alexa)
+    port: 8123
+    icon: "🏠"
+    stack: domotica
+    health: { type: http, path: /manifest.json }   # público y ligero: no exige sesión
+    tags: [domótica, xiaomi, alexa, iot]
+    apis:
+      - path: "/api/"
+        note: "Exige cabecera Authorization: Bearer <token de larga duración del perfil>"

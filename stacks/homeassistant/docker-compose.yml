@@ -1,0 +1,24 @@
+# Home Assistant: control de los aparatos de casa (Xiaomi Robot Vacuum T12, Alexa).
+#
+# El portal solo MONITORIZA (quién está conectado y qué consulta por DNS); el
+# CONTROL vive aquí, aislado, porque es lo que guarda tokens de las nubes de
+# Xiaomi y Amazon. Ver README.md antes de arrancarlo.
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    # Red host: Home Assistant descubre aparatos por mDNS/SSDP (multicast), que no
+    # cruza el NAT de una red bridge. Escucha en el 8123 (LAN + tailnet).
+    network_mode: host
+    environment:
+      TZ: "Europe/Madrid"
+    volumes:
+      # config/ guarda la base de datos y los TOKENS de Xiaomi y Amazon en claro:
+      # está en .gitignore y hay que dejarla con permisos 700 (ver README).
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+    # Sin privileged ni dispositivos USB: no hay Zigbee ni Bluetooth que gestionar.
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m        # ignorado en este kernel (HL-004), se deja documentado
+    restart: unless-stopped

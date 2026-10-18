@@ -41,6 +41,11 @@
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 10l4 5M13 5l4 5-4 5"/></svg>
         APIs <span class="cuenta">{{ n_apis }}</span>
       </a>
+      {% set activos = dispositivos.lista|selectattr('estado', 'ne', 'ausente')|list %}
+      <a href="/dispositivos?destino={{ destino }}" {% if seccion == 'dispositivos' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5" width="14" height="9" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg>
+        Dispositivos {% if dispositivos.ts %}<span class="cuenta" aria-label="{{ activos|length }} en la red">{{ activos|length }}</span>{% endif %}
+      </a>
       {% set tiempo = entorno.tiempo.datos %}
       {% set sismos_fuertes = (entorno.sismos.datos or [])|selectattr('mag', 'ge', 3)|selectattr('ts', 'ge', ahora() - 86400)|list %}
       <a href="/entorno?destino={{ destino }}" {% if seccion == 'entorno' %}aria-current="page"{% endif %}>

@@ -84,6 +84,7 @@ curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services \
 | `/alertas` | Registro de caídas y recuperaciones de los últimos días |
 | `/apis` | Todos los endpoints de API del catálogo, con la URL completa |
 | `/entorno` | Tiempo, terremotos cercanos y noticias de la zona de la Pi |
+| `/dispositivos` | Aparatos de la red: conectados o no y qué consultan por DNS |
 | `/api/services` | Catálogo en JSON, con sondas opcionales |
 | `/api/eventos` | Cambios de estado en JSON (`?servicio=`, `?limite=`) |
 | `/api/config` | Chequeo de configuración del despliegue |
@@ -168,6 +169,40 @@ Decisiones de seguridad, porque esto es lo único del portal que lee datos de in
   `javascript:` se descarta) y autoescape de Jinja en los titulares.
 - **Una fuente caída no rompe nada**: se conserva el último dato bueno y se indica
   la hora y el error del último intento.
+
+## Dispositivos: inventario IoT
+
+`app/dispositivos.py` cruza dos fuentes cada minuto:
+
+- **Tabla ARP del host** (`/proc/net/arp`): quién está conectado. El portal va en red
+  host, así que la lee sin enviar paquetes y sin `NET_RAW` (sigue con `cap_drop: ALL`).
+- **API de Pi-hole v6**: dispositivos, consultas DNS de las últimas 24 h, dominios más
+  consultados y cuántos bloqueó Pi-hole. Es la telemetría que el robot o la Alexa
+  mandan "a casa".
+
+Configuración (en el `.env` del portal):
+
+```bash
+PIHOLE_API=http://127.0.0.1/api
+PIHOLE_PASSWORD=<contraseña de aplicación de Pi-hole>
+```
+
+Usa una **contraseña de aplicación** (*Pi-hole → Settings → Web interface / API →
+Configure app password*), no la de administrador: se revoca sin tocar la principal.
+El portal abre **una** sesión y la reutiliza (Pi-hole limita las sesiones
+simultáneas) y la cierra al apagarse.
+
+Los nombres de los aparatos van en `privado/dispositivos.yaml`, **fuera del repo**
+(está en `.gitignore`): un repo público no debe listar lo que hay en tu casa.
+Plantilla en `dispositivos.example.yaml`. Lo que Pi-hole ve y no está en el
+inventario aparece como *sin identificar*, en ámbar: un aparato desconocido en la
+red es lo primero que hay que mirar.
+
+Si un aparato está conectado pero no tiene consultas DNS, probablemente usa un DNS
+fijado de fábrica y se salta Pi-hole (como el iPhone en HL-003).
+
+El control de los aparatos (encender el robot, avisos por Alexa) no está en el
+portal: está en `stacks/homeassistant`, aislado, porque guarda tokens de Xiaomi y Amazon.
 
 ## Seguridad
 

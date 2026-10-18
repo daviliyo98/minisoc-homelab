@@ -23,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import catalog, entorno, health, history
+from . import catalog, dispositivos, entorno, health, history
 
 # Rutas relativas al propio paquete, no al WORKDIR: el Dockerfile hace
 # `COPY app ./app`, así que el código vive en /app/app y los estáticos en
@@ -46,6 +46,7 @@ async def ciclo_de_vida(_app: FastAPI):
     tareas = [
         asyncio.create_task(history.muestreador()),
         asyncio.create_task(entorno.actualizador()),
+        asyncio.create_task(dispositivos.actualizador()),
     ]
     try:
         yield
@@ -189,6 +190,7 @@ async def _comun(request: Request, destino: str, seccion: str) -> dict[str, Any]
         "sin_clave": SIN_CLAVE,
         "historial": history.disponible(),
         "entorno": entorno.estado(),
+        "dispositivos": dispositivos.estado(),
         "todos": servicios,
         "estados": estados,
         "caidos": caidos,
@@ -287,6 +289,21 @@ async def pagina_entorno(request: Request, destino: str = DESTINO, _user: str = 
     """Tiempo, terremotos cercanos y noticias de la zona de la Pi."""
     ctx = await _comun(request, destino, "entorno")
     return plantillas.TemplateResponse(request, "entorno.html", ctx)
+
+
+@app.get("/dispositivos", response_class=HTMLResponse)
+async def pagina_dispositivos(
+    request: Request,
+    destino: str = DESTINO,
+    sel: str = Query("", max_length=17),
+    _user: str = Depends(_exigir),
+):
+    """Aparatos de la red: conectados o no, y qué consultan por DNS."""
+    ctx = await _comun(request, destino, "dispositivos")
+    lista = ctx["dispositivos"]["lista"]
+    ctx["ficha_disp"] = next((d for d in lista if d["mac"] == sel.lower()), None) or (lista[0] if lista else None)
+    ctx["ruta_inventario"] = str(dispositivos.RUTA_INVENTARIO)
+    return plantillas.TemplateResponse(request, "dispositivos.html", ctx)
 
 
 @app.get("/apis", response_class=HTMLResponse)

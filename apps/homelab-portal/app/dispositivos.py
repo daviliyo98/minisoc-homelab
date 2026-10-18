@@ -1,0 +1,267 @@
+"""Dispositivos de la red: inventario IoT a partir de ARP y de Pi-hole.
+
+Qué se quiere saber de cada aparato (robot aspirador, Alexa...):
+- ¿Está conectado?   -> tabla ARP del host (/proc/net/arp). El portal va en red
+  host, así que ve la del propio sistema sin enviar un solo paquete y sin
+  NET_RAW: no hace falta ping ni ampliar los permisos del contenedor.
+- ¿Qué hace en la red? -> API de Pi-hole v6: cuántas consultas DNS hace, a qué
+  dominios y cuántas le bloquea. Es la telemetría que el aparato manda "a casa".
+
+Nombres: el inventario (qué MAC es el robot) vive en privado/dispositivos.yaml,
+fuera del repositorio: un repo público no debe listar los aparatos de tu casa.
+Lo que Pi-hole ve y no está en el inventario se muestra como "sin identificar":
+un dispositivo desconocido en la red es justo lo que un SOC quiere ver primero.
+
+Credenciales de Pi-hole: PIHOLE_PASSWORD en .env. Mejor una "contraseña de
+aplicación" (Pi-hole > Settings > Web interface / API) que la de administrador:
+se revoca sola sin tocar la principal.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import time
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import httpx
+import yaml
+
+log = logging.getLogger("portal.dispositivos")
+
+CADA = max(30, int(os.environ.get("PORTAL_DISPOSITIVOS_CADA", "60")))
+RUTA_ARP = Path(os.environ.get("PORTAL_ARP", "/proc/net/arp"))
+RUTA_INVENTARIO = Path(os.environ.get("PORTAL_INVENTARIO", "/app/privado/dispositivos.yaml"))
+PIHOLE_API = os.environ.get("PIHOLE_API", "http://127.0.0.1/api").rstrip("/")
+PIHOLE_CLAVE = os.environ.get("PIHOLE_PASSWORD", "")
+ACTIVO_SI_DNS_EN = 15 * 60           # una consulta DNS en 15 min = está activo
+MAX_CONSULTAS = 2000                 # por dispositivo y refresco: una Pi no da para más
+
+# Estados de Pi-hole v6 que significan "bloqueada".
+BLOQUEADAS = {
+    "GRAVITY", "REGEX", "DENYLIST", "GRAVITY_CNAME", "REGEX_CNAME", "DENYLIST_CNAME",
+    "EXTERNAL_BLOCKED_IP", "EXTERNAL_BLOCKED_NULL", "EXTERNAL_BLOCKED_NXRA",
+    "EXTERNAL_BLOCKED_EDE15", "SPECIAL_DOMAIN",
+}
+
+_estado: dict[str, Any] = {"lista": [], "ts": None, "error": None, "pihole": bool(PIHOLE_CLAVE)}
+_sid: str | None = None
+
+
+def estado() -> dict[str, Any]:
+    return _estado
+
+
+def _mac(valor: str | None) -> str:
+    return (valor or "").strip().lower().replace("-", ":")
+
+
+# Redes internas del propio host: contenedores Docker y Tailscale no son aparatos de casa.
+_INTERFACES_VIRTUALES = ("docker", "br-", "veth", "tailscale", "lo", "virbr")
+
+
+def _es_virtual(mac: str, interfaz: str = "") -> bool:
+    return mac.startswith("02:42:") or interfaz.startswith(_INTERFACES_VIRTUALES)
+
+
+# --- Fuentes locales --------------------------------------------------------------
+
+def leer_arp(ruta: Path = RUTA_ARP) -> dict[str, dict[str, Any]]:
+    """MAC -> {ip, completo}. Flags 0x2 = la entrada está resuelta (el vecino respondió)."""
+    salida: dict[str, dict[str, Any]] = {}
+    try:
+        lineas = ruta.read_text(encoding="ascii", errors="replace").splitlines()[1:]
+    except OSError as exc:
+        log.warning("No se puede leer %s: %s", ruta, exc)
+        return salida
+    for linea in lineas:
+        partes = linea.split()
+        if len(partes) < 6:
+            continue
+        ip, flags, mac, interfaz = partes[0], partes[2], _mac(partes[3]), partes[5]
+        if mac in ("", "00:00:00:00:00:00") or _es_virtual(mac, interfaz):
+            continue
+        salida[mac] = {"ip": ip, "completo": flags == "0x2", "interfaz": interfaz}
+    return salida
+
+
+def inventario(ruta: Path = RUTA_INVENTARIO) -> dict[str, dict[str, Any]]:
+    """MAC -> {nombre, tipo, nota}. Un fichero ausente o roto no rompe la página."""
+    try:
+        datos = yaml.safe_load(ruta.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, yaml.YAMLError) as exc:
+        log.warning("Inventario ilegible (%s): %s", ruta, exc)
+        return {}
+    salida = {}
+    for d in datos.get("dispositivos") or []:
+        if isinstance(d, dict) and d.get("mac"):
+            salida[_mac(str(d["mac"]))] = {
+                "nombre": str(d.get("nombre") or d["mac"])[:60],
+                "tipo": str(d.get("tipo") or "")[:30],
+                "nota": str(d.get("nota") or "")[:200],
+            }
+    return salida
+
+
+# --- Pi-hole v6 -----------------------------------------------------------------------
+
+async def _sesion(cliente: httpx.AsyncClient) -> str:
+    """Abre sesión una vez y la reutiliza. Pi-hole limita las sesiones simultáneas:
+    pedir una nueva en cada refresco acabaría agotándolas."""
+    global _sid
+    if _sid:
+        return _sid
+    r = await cliente.post(f"{PIHOLE_API}/auth", json={"password": PIHOLE_CLAVE})
+    r.raise_for_status()
+    sesion = r.json().get("session") or {}
+    if not sesion.get("valid") or not sesion.get("sid"):
+        raise PermissionError("Pi-hole rechazó la contraseña")
+    _sid = sesion["sid"]
+    return _sid
+
+
+async def _api(cliente: httpx.AsyncClient, ruta: str, **params: Any) -> dict[str, Any]:
+    global _sid
+    for intento in (1, 2):
+        sid = await _sesion(cliente)
+        r = await cliente.get(f"{PIHOLE_API}{ruta}", params=params, headers={"X-FTL-SID": sid})
+        if r.status_code == 401 and intento == 1:
+            _sid = None                     # la sesión caducó: una sola reautenticación
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise PermissionError("Pi-hole no acepta la sesión")
+
+
+async def cerrar_sesion(cliente: httpx.AsyncClient | None = None) -> None:
+    """Al apagar el portal, liberar la sesión en vez de dejarla caducar."""
+    global _sid
+    if not _sid:
+        return
+    propio = cliente is None
+    cliente = cliente or httpx.AsyncClient(timeout=5)
+    try:
+        await cliente.delete(f"{PIHOLE_API}/auth", headers={"X-FTL-SID": _sid})
+    except httpx.HTTPError:
+        pass
+    finally:
+        _sid = None
+        if propio:
+            await cliente.aclose()
+
+
+async def _actividad(cliente: httpx.AsyncClient, ip: str, ahora: int) -> dict[str, Any]:
+    """Consultas DNS de las últimas 24 h de una IP: total, bloqueadas y dominios."""
+    j = await _api(cliente, "/queries", client_ip=ip, length=MAX_CONSULTAS, **{"from": ahora - 86400, "until": ahora})
+    consultas = j.get("queries") or []
+    dominios: Counter[str] = Counter()
+    bloqueados: Counter[str] = Counter()
+    for q in consultas:
+        dom = str(q.get("domain") or "")[:253]
+        if not dom:
+            continue
+        dominios[dom] += 1
+        if str(q.get("status") or "").upper() in BLOQUEADAS:
+            bloqueados[dom] += 1
+    total = int(j.get("recordsFiltered") or len(consultas))
+    return {
+        "consultas": total,
+        "muestra": len(consultas),
+        "bloqueadas": sum(bloqueados.values()),
+        "dominios": [
+            {"dominio": d, "n": n, "bloqueado": bloqueados.get(d, 0) > 0}
+            for d, n in dominios.most_common(8)
+        ],
+        "dominios_distintos": len(dominios),
+    }
+
+
+# --- Combinación ----------------------------------------------------------------------
+
+async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
+    ahora = int(time.time())
+    arp = leer_arp()
+    inv = inventario()
+    disp: dict[str, dict[str, Any]] = {}
+
+    def base(mac: str) -> dict[str, Any]:
+        return disp.setdefault(mac, {
+            "mac": mac, "ip": None, "fabricante": "", "nombre_red": "",
+            "en_arp": False, "ultima_dns": None, "actividad": None,
+            **inv.get(mac, {"nombre": "", "tipo": "", "nota": ""}),
+            "conocido": mac in inv,
+        })
+
+    for mac in inv:
+        base(mac)
+    for mac, a in arp.items():
+        d = base(mac)
+        d.update(ip=a["ip"], en_arp=a["completo"])
+
+    error = None
+    if PIHOLE_CLAVE:
+        propio = cliente is None
+        cliente = cliente or httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0), trust_env=False)
+        try:
+            j = await _api(cliente, "/network/devices", max_devices=100, max_addresses=4)
+            for dev in j.get("devices") or []:
+                mac = _mac(dev.get("hwaddr"))
+                # Pi-hole agrupa a veces por "ip-X.X.X.X" cuando no conoce la MAC.
+                if not mac or mac.startswith("ip-") or mac == "00:00:00:00:00:00" or _es_virtual(mac, str(dev.get("interface") or "")):
+                    continue
+                ips = dev.get("ips") or []
+                d = base(mac)
+                d["fabricante"] = str(dev.get("macVendor") or "")[:60]
+                d["ultima_dns"] = dev.get("lastQuery") or None
+                if ips:
+                    d["ip"] = d["ip"] or ips[0].get("ip")
+                    d["nombre_red"] = str(ips[0].get("name") or "")[:80]
+            # Actividad solo de lo que importa: inventariados y lo visto hoy.
+            objetivo = [d for d in disp.values()
+                        if d["ip"] and (d["conocido"] or (d["ultima_dns"] or 0) > ahora - 86400)]
+            resultados = await asyncio.gather(
+                *(_actividad(cliente, d["ip"], ahora) for d in objetivo), return_exceptions=True
+            )
+            for d, r in zip(objetivo, resultados):
+                if isinstance(r, BaseException):
+                    log.warning("Actividad de %s: %s", d["ip"], r)
+                else:
+                    d["actividad"] = r
+        except (httpx.HTTPError, PermissionError, ValueError) as exc:
+            error = f"{type(exc).__name__}: {exc}"[:160]
+            log.warning("Pi-hole: %s", error)
+        finally:
+            if propio:
+                await cliente.aclose()
+
+    for d in disp.values():
+        dns_reciente = bool(d["ultima_dns"]) and d["ultima_dns"] > ahora - ACTIVO_SI_DNS_EN
+        d["estado"] = "activo" if dns_reciente else ("conectado" if d["en_arp"] else "ausente")
+        act = d["actividad"]
+        d["pct_bloqueo"] = round(100 * act["bloqueadas"] / act["muestra"]) if act and act["muestra"] else None
+
+    orden = {"activo": 0, "conectado": 1, "ausente": 2}
+    _estado.update(
+        lista=sorted(disp.values(), key=lambda d: (not d["conocido"], orden[d["estado"]], d["ip"] or "~")),
+        ts=ahora,
+        error=error,
+    )
+
+
+async def actualizador() -> None:
+    try:
+        while True:
+            try:
+                await refrescar()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - el bucle no puede morir
+                log.warning("Fallo al refrescar dispositivos: %s", exc)
+            await asyncio.sleep(CADA)
+    finally:
+        await cerrar_sesion()

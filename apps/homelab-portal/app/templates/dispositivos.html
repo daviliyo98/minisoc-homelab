@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block titulo %}Dispositivos{% endblock %}
+
+{% macro estado_txt(e) -%}
+  {%- if e == 'activo' %}Activo{% elif e == 'conectado' %}Conectado{% else %}No visto{% endif -%}
+{%- endmacro %}
+
+{% macro nombre(d) -%}{{ d.nombre or d.nombre_red or 'Sin identificar' }}{%- endmacro %}
+
+{% block contenido %}
+{% set lista = dispositivos.lista %}
+{% set desconocidos = lista|rejectattr('conocido')|list %}
+
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>Dispositivos</h1>
+  </div>
+  <p class="frescura">
+    {% if dispositivos.ts %}Comprobado a las <time>{{ dispositivos.ts|hora }}</time>.{% endif %}
+    Conexión por la tabla ARP de la Pi; actividad DNS de las últimas 24 h según Pi-hole.
+  </p>
+</header>
+
+{% if not dispositivos.pihole %}
+  <p class="aviso aviso-pagina">Sin <code>PIHOLE_PASSWORD</code> en el <code>.env</code> del portal: solo se ve quién está conectado, no qué consulta cada aparato.</p>
+{% elif dispositivos.error %}
+  <p class="aviso aviso-pagina">No se pudo consultar Pi-hole ({{ dispositivos.error }}). Se reintenta cada minuto; mientras, solo hay datos de ARP.</p>
+{% endif %}
+
+<div class="maestro-detalle">
+  <section class="lista" aria-label="Lista de dispositivos">
+    {% if lista %}
+      <div class="fila fila-disp fila-cabecera" aria-hidden="true">
+        <span></span><span>Dispositivo</span><span>IP</span><span class="der">DNS 24 h</span><span class="der">Bloqueo</span>
+      </div>
+      <ul>
+        {% for d in lista %}
+          <li>
+            <a class="fila fila-disp disp-{{ d.estado }} {{ 'desconocido' if not d.conocido }}" href="/dispositivos?destino={{ destino }}&sel={{ d.mac|urlencode }}"
+               {% if ficha_disp and ficha_disp.mac == d.mac %}aria-current="true"{% endif %}>
+              <span class="led" aria-hidden="true"></span>
+              <span class="c-nombre">
+                <b>{{ nombre(d) }}</b>
+                <span class="c-sub">{{ d.fabricante or d.mac }}</span>
+                <span class="solo-lector">, {{ estado_txt(d.estado) }}</span>
+              </span>
+              <span class="c-url">{{ d.ip or '—' }}</span>
+              <span class="c-ms der">{{ d.actividad.consultas if d.actividad else '—' }}</span>
+              <span class="c-ms der">{{ (d.pct_bloqueo ~ ' %') if d.pct_bloqueo is not none else '—' }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="vacio">
+        <p class="vacio-titulo">Todavía no hay dispositivos.</p>
+        <p>La primera lectura se hace al arrancar el portal y luego cada minuto.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if ficha_disp %}
+  {% set d = ficha_disp %}
+  <aside class="ficha disp-ficha disp-{{ d.estado }}" id="ficha" aria-labelledby="ficha-nombre">
+    <div class="ficha-cabecera">
+      {% if d.tipo %}<p class="ficha-tipo">{{ d.tipo }}</p>{% endif %}
+      <h2 id="ficha-nombre">{{ nombre(d) }}</h2>
+      <p class="pastilla">
+        <span class="led" aria-hidden="true"></span>
+        <span>{{ estado_txt(d.estado) }}{% if d.ultima_dns %}<span class="pastilla-dura">, última consulta DNS a las {{ d.ultima_dns|hora }}</span>{% endif %}</span>
+      </p>
+      {% if d.nota %}<p class="ficha-desc">{{ d.nota }}</p>{% endif %}
+    </div>
+
+    <dl class="datos">
+      <div><dt>IP</dt><dd class="url">{{ d.ip or '—' }}</dd></div>
+      <div><dt>MAC</dt><dd class="url">{{ d.mac }}</dd></div>
+      <div><dt>Fabricante</dt><dd>{{ d.fabricante or 'Desconocido' }}</dd></div>
+      <div><dt>Nombre en la red</dt><dd>{{ d.nombre_red or '—' }}</dd></div>
+    </dl>
+
+    {% if not d.conocido %}
+      <section class="bloque identificar" aria-labelledby="t-ident">
+        <h3 id="t-ident">¿Qué aparato es?</h3>
+        <p class="tenue">Ponle nombre añadiéndolo a <code>privado/dispositivos.yaml</code> (fuera del repo). Se aplica en el siguiente refresco, sin reiniciar:</p>
+        <pre class="codigo"><code>dispositivos:
+  - mac: "{{ d.mac }}"
+    nombre: "Nombre del aparato"
+    tipo: "Marca y modelo"</code></pre>
+        <button type="button" class="boton-sec pequeno" data-copiar='  - mac: "{{ d.mac }}"
+    nombre: "Nombre del aparato"
+    tipo: "Marca y modelo"'>Copiar bloque</button>
+      </section>
+    {% endif %}
+
+    <section class="bloque" aria-labelledby="t-dns">
+      <div class="bloque-titulo">
+        <h3 id="t-dns">Actividad DNS 24 h</h3>
+        {% if d.actividad %}<p class="cifra">{{ d.actividad.consultas }}</p>{% endif %}
+      </div>
+      {% if d.actividad %}
+        {% set a = d.actividad %}
+        <p class="tenue resumen-dns">
+          {{ a.dominios_distintos }} dominio{{ 's' if a.dominios_distintos != 1 }} distinto{{ 's' if a.dominios_distintos != 1 }};
+          Pi-hole bloqueó <strong class="{{ 'bloq' if a.bloqueadas }}">{{ a.bloqueadas }}</strong> consulta{{ 's' if a.bloqueadas != 1 }}{% if d.pct_bloqueo is not none %} ({{ d.pct_bloqueo }} %){% endif %}.
+          {% if a.muestra < a.consultas %}Analizadas las {{ a.muestra }} más recientes.{% endif %}
+        </p>
+        {% if a.dominios %}
+          {% set maximo = a.dominios[0].n %}
+          <ol class="dominios" aria-label="Dominios más consultados">
+            {% for dm in a.dominios %}
+              <li class="{{ 'bloq' if dm.bloqueado }}">
+                <span class="dom-nombre">{{ dm.dominio }}</span>
+                <span class="dom-n">{{ dm.n }}{% if dm.bloqueado %}<span class="dom-etq">bloqueado</span>{% endif %}</span>
+                <progress class="dom-barra" value="{{ dm.n }}" max="{{ maximo }}" aria-hidden="true"></progress>
+              </li>
+            {% endfor %}
+          </ol>
+        {% endif %}
+      {% elif not dispositivos.pihole %}
+        <p class="tenue">Añade <code>PIHOLE_PASSWORD</code> al <code>.env</code> del portal para ver qué consulta.</p>
+      {% else %}
+        <p class="tenue">Sin consultas DNS en las últimas 24 h. Si el aparato está activo, puede que use otro DNS distinto de Pi-hole (por ejemplo, uno fijado de fábrica).</p>
+      {% endif %}
+    </section>
+  </aside>
+  {% endif %}
+</div>
+{% endblock %}

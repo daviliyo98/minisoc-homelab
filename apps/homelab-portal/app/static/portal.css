@@ -337,8 +337,8 @@ tr.mal .vigente { color: var(--error); }
 /* --- Pantallas medianas: la ficha baja bajo la lista ------------------------ */
 @media (max-width: 1180px) {
   /* La ficha ya enseña la dirección: en la lista sobra cuando falta ancho. */
-  .fila { grid-template-columns: 0.75rem 3.6rem minmax(0, 1fr) 6.5rem; }
-  .c-stack, .c-url, .fila-cabecera span:nth-child(4), .fila-cabecera span:nth-child(5) { display: none; }
+  .fila:not(.fila-disp) { grid-template-columns: 0.75rem 3.6rem minmax(0, 1fr) 6.5rem; }
+  .c-stack, .fila:not(.fila-disp) .c-url, .fila-cabecera:not(.fila-disp) span:nth-child(4), .fila-cabecera:not(.fila-disp) span:nth-child(5) { display: none; }
 }
 @media (max-width: 900px) {
   .maestro-detalle { grid-template-columns: 1fr; }
@@ -367,7 +367,8 @@ tr.mal .vigente { color: var(--error); }
   .cabecera { padding: 1rem; }
   .buscar { margin-left: 0; width: 100%; }
   .buscar input { width: 100%; }
-  .fila { grid-template-columns: 0.75rem 3rem minmax(0, 1fr) auto; padding: 0.75rem 1rem; gap: 0.75rem; }
+  .fila { padding: 0.75rem 1rem; gap: 0.75rem; }
+  .fila:not(.fila-disp) { grid-template-columns: 0.75rem 3rem minmax(0, 1fr) auto; }
   .ficha { padding: 1.25rem 1rem 2rem; }
   .pagina { padding: 1rem 1rem 2rem; }
   .tabla thead { display: none; }
@@ -487,4 +488,52 @@ tr.mal .vigente { color: var(--error); }
 .hora-datos dd.alta { color: var(--enlace); font-weight: 600; }
 @media (max-width: 720px) {
   .horas { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* --- Dispositivos ------------------------------------------------------------- */
+.aviso-pagina { margin: 1rem 1.5rem 0; }
+.fila-disp { grid-template-columns: 0.75rem minmax(10rem, 1.6fr) minmax(6rem, 1fr) 5.5rem 5rem; }
+.c-sub { display: block; color: var(--tenue); font-size: 0.82rem; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-nombre { min-width: 0; }
+.disp-activo .led, .disp-ficha.disp-activo .pastilla .led { background: var(--ok); }
+.disp-conectado .led { background: transparent; box-shadow: inset 0 0 0 2px var(--ok); }
+.disp-ausente .led { background: transparent; box-shadow: inset 0 0 0 1.5px var(--nd); }
+.fila-disp.desconocido .c-nombre b { color: var(--parcial); }
+.disp-ficha.disp-activo .pastilla { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, var(--chasis)); }
+.disp-ficha.disp-conectado .pastilla { color: var(--texto); }
+.ficha-tipo { margin: 0; color: var(--tenue); font-size: 0.88rem; }
+.disp-ficha h2 { margin-top: 0.15rem; font: 600 1.6rem/1.15 var(--estrecha); }
+
+.identificar { padding: 0.9rem 1rem; border: 1px dashed color-mix(in srgb, var(--parcial) 60%, transparent); border-radius: 10px; }
+.identificar h3 { color: var(--parcial); }
+.identificar p { margin: 0.35rem 0 0.6rem; font-size: 0.88rem; }
+.codigo { margin: 0 0 0.6rem; padding: 0.7rem 0.8rem; background: var(--fondo); border: 1px solid var(--linea); border-radius: 8px; overflow-x: auto; font-size: 0.85rem; }
+
+.resumen-dns { margin: 0.4rem 0 0.7rem; font-size: 0.9rem; }
+.resumen-dns strong { color: var(--texto); }
+.resumen-dns strong.bloq { color: var(--error); }
+.dominios { list-style: none; margin: 0; padding: 0; }
+.dominios li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 0.75rem;
+  padding: 0.45rem 0; border-top: 1px solid var(--linea);
+}
+.dominios li:first-child { border-top: 0; }
+.dom-nombre { font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+.dom-n { font-size: 0.85rem; color: var(--tenue); text-align: right; white-space: nowrap; }
+.dom-etq { margin-left: 0.4rem; padding: 0 0.35rem; border-radius: 4px; background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--error); font-size: 0.75rem; font-weight: 600; }
+.dominios li.bloq .dom-nombre { color: var(--error); text-decoration: line-through; text-decoration-thickness: 1px; }
+.dom-barra { grid-column: 1 / -1; width: 100%; height: 4px; appearance: none; -webkit-appearance: none; border: 0; border-radius: 2px; background: var(--linea); overflow: hidden; }
+.dom-barra::-webkit-progress-bar { background: var(--linea); border-radius: 2px; }
+.dom-barra::-webkit-progress-value { background: var(--enlace); border-radius: 2px; }
+.dom-barra::-moz-progress-bar { background: var(--enlace); border-radius: 2px; }
+.dominios li.bloq .dom-barra::-webkit-progress-value { background: var(--error); }
+.dominios li.bloq .dom-barra::-moz-progress-bar { background: var(--error); }
+
+@media (max-width: 1180px) {
+  .fila-disp { grid-template-columns: 0.75rem minmax(0, 1fr) 5rem 4.5rem; }
+  .fila-disp .c-url, .fila-disp.fila-cabecera span:nth-child(3) { display: none; }
+}
+@media (max-width: 720px) {
+  .aviso-pagina { margin: 0.75rem 1rem 0; }
+  .fila-disp { grid-template-columns: 0.75rem minmax(0, 1fr) auto auto; }
 }
