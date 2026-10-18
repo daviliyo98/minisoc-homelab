@@ -23,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import catalog, health, history
+from . import catalog, entorno, health, history
 
 # Rutas relativas al propio paquete, no al WORKDIR: el Dockerfile hace
 # `COPY app ./app`, así que el código vive en /app/app y los estáticos en
@@ -42,14 +42,19 @@ seguridad = HTTPBasic(auto_error=False)
 
 @contextlib.asynccontextmanager
 async def ciclo_de_vida(_app: FastAPI):
-    """Arranca el muestreador del historial y lo para limpio al apagar."""
-    tarea = asyncio.create_task(history.muestreador())
+    """Arranca las tareas de fondo (historial y entorno) y las para limpio al apagar."""
+    tareas = [
+        asyncio.create_task(history.muestreador()),
+        asyncio.create_task(entorno.actualizador()),
+    ]
     try:
         yield
     finally:
-        tarea.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await tarea
+        for tarea in tareas:
+            tarea.cancel()
+        for tarea in tareas:
+            with contextlib.suppress(asyncio.CancelledError):
+                await tarea
 
 
 app = FastAPI(
@@ -183,6 +188,7 @@ async def _comun(request: Request, destino: str, seccion: str) -> dict[str, Any]
         "stacks": catalog.stacks(),
         "sin_clave": SIN_CLAVE,
         "historial": history.disponible(),
+        "entorno": entorno.estado(),
         "todos": servicios,
         "estados": estados,
         "caidos": caidos,
@@ -274,6 +280,13 @@ def _con_duracion(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ev["dura"] = (fin - ev["ts"]) if fin else None
         siguiente[ev["servicio"]] = ev["ts"]
     return evs
+
+
+@app.get("/entorno", response_class=HTMLResponse)
+async def pagina_entorno(request: Request, destino: str = DESTINO, _user: str = Depends(_exigir)):
+    """Tiempo, terremotos cercanos y noticias de la zona de la Pi."""
+    ctx = await _comun(request, destino, "entorno")
+    return plantillas.TemplateResponse(request, "entorno.html", ctx)
 
 
 @app.get("/apis", response_class=HTMLResponse)

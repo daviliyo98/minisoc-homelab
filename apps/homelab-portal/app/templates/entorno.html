@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block titulo %}Entorno{% endblock %}
+
+{% macro sello(bloque, fuente) -%}
+  <p class="sello">
+    {%- if bloque.ts %}{{ fuente }}, actualizado a las {{ bloque.ts|hora }}.{% endif %}
+    {%- if bloque.error %} <span class="sello-error">Último intento fallido ({{ bloque.error }}); se reintenta cada {{ (entorno.cada // 60) }} min.</span>{% endif %}
+  </p>
+{%- endmacro %}
+
+{% macro icono(nombre, clase='') -%}
+  <svg class="icono-tiempo {{ clase }}" viewBox="0 0 32 32" aria-hidden="true"><use href="#i-{{ nombre }}"/></svg>
+{%- endmacro %}
+
+{% block contenido %}
+{% set cfg = entorno.config %}
+{% set t, sis, nts = entorno.tiempo, entorno.sismos, entorno.noticias %}
+
+{# Iconos del tiempo: trazos, heredan el color del texto. #}
+<svg width="0" height="0" class="solo-lector" aria-hidden="true">
+  <symbol id="i-sol" viewBox="0 0 32 32"><circle cx="16" cy="16" r="6"/><path d="M16 3v4M16 25v4M3 16h4M25 16h4M6.8 6.8l2.8 2.8M22.4 22.4l2.8 2.8M6.8 25.2l2.8-2.8M22.4 9.6l2.8-2.8"/></symbol>
+  <symbol id="i-sol-nube" viewBox="0 0 32 32"><circle cx="12" cy="11" r="4.5"/><path d="M12 2.5v2.5M4.5 11H2M5.9 4.9l1.8 1.8M18.1 4.9l-1.8 1.8"/><path d="M10 27h13a5 5 0 0 0 0-10 7 7 0 0 0-13.3 2A4 4 0 0 0 10 27Z"/></symbol>
+  <symbol id="i-nube" viewBox="0 0 32 32"><path d="M9 25h14a6 6 0 0 0 0-12 8 8 0 0 0-15.4 3A4.5 4.5 0 0 0 9 25Z"/></symbol>
+  <symbol id="i-niebla" viewBox="0 0 32 32"><path d="M9 18h14a5.5 5.5 0 0 0 0-11 7.5 7.5 0 0 0-14.5 2.5A4.3 4.3 0 0 0 9 18Z"/><path d="M5 23h22M8 28h16"/></symbol>
+  <symbol id="i-lluvia" viewBox="0 0 32 32"><path d="M9 19h14a5.5 5.5 0 0 0 0-11 7.5 7.5 0 0 0-14.5 2.5A4.3 4.3 0 0 0 9 19Z"/><path d="M11 23l-1.5 4M17 23l-1.5 4M23 23l-1.5 4"/></symbol>
+  <symbol id="i-nieve" viewBox="0 0 32 32"><path d="M9 19h14a5.5 5.5 0 0 0 0-11 7.5 7.5 0 0 0-14.5 2.5A4.3 4.3 0 0 0 9 19Z"/><path d="M11 24v4M9 26h4M21 24v4M19 26h4"/></symbol>
+  <symbol id="i-tormenta" viewBox="0 0 32 32"><path d="M9 18h14a5.5 5.5 0 0 0 0-11 7.5 7.5 0 0 0-14.5 2.5A4.3 4.3 0 0 0 9 18Z"/><path d="M17 20l-4 5h5l-3 5"/></symbol>
+</svg>
+
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>Entorno de la Pi <span class="filtro-activo">en {{ cfg.nombre }}</span></h1>
+  </div>
+  <p class="frescura">La Pi consulta las fuentes cada {{ entorno.cada // 60 }} min; tu navegador no contacta con ningún tercero.
+    La ubicación se cambia con un bloque <code>entorno:</code> en <code>services.yaml</code>.</p>
+</header>
+
+<div class="pagina entorno">
+
+  {# --- Tiempo ------------------------------------------------------------- #}
+  <section class="tarjeta-entorno tiempo" aria-labelledby="t-tiempo">
+    <h2 id="t-tiempo">Tiempo</h2>
+    {% if t.datos %}
+      {% set d = t.datos %}
+      <div class="ahora-tiempo">
+        {{ icono(d.icono, 'grande') }}
+        <p class="temp">{{ d.temp }}°</p>
+        <div>
+          <p class="estado-cielo">{{ d.texto }}</p>
+          <p class="tenue">Sensación de {{ d.sensacion }}°, humedad del {{ d.humedad }} %, viento a {{ d.viento }} km/h</p>
+        </div>
+      </div>
+      <ol class="dias" aria-label="Previsión de 7 días">
+        {% for dia in d.dias %}
+          <li {% if loop.first %}class="hoy"{% endif %}>
+            <span class="dia-nombre">{{ dia.nombre }}</span>
+            {{ icono(dia.icono) }}
+            <span class="solo-lector">{{ dia.texto }},</span>
+            <span class="dia-max">{{ dia.max }}°</span>
+            <span class="dia-min"><span class="solo-lector">mínima </span>{{ dia.min }}°</span>
+            {% if dia.lluvia is not none %}<span class="dia-lluvia {{ 'alta' if dia.lluvia >= 50 }}">{{ dia.lluvia }} %<span class="solo-lector"> de probabilidad de lluvia</span></span>{% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="tenue">{{ 'Sin datos todavía: la primera consulta se hace al arrancar el portal.' if not t.error else 'No se pudo consultar Open-Meteo. ¿Tiene la Pi salida a internet?' }}</p>
+    {% endif %}
+    {{ sello(t, 'Open-Meteo') }}
+  </section>
+
+  {# --- Terremotos --------------------------------------------------------- #}
+  <section class="tarjeta-entorno sismos" aria-labelledby="t-sismos">
+    <h2 id="t-sismos">Terremotos a menos de {{ cfg.radio_km }} km</h2>
+    {% if sis.datos is not none %}
+      {% if sis.datos %}
+        {% set fuertes = sis.datos|selectattr('mag', 'ge', 3)|list %}
+        <p class="resumen-sismos">
+          {{ sis.datos|length }} en los últimos {{ cfg.dias_sismos }} días{% if fuertes %},
+          <strong>{{ fuertes|length }} de magnitud 3 o más</strong>{% endif %}.
+          El más cercano, a {{ (sis.datos|map(attribute='km')|min) }} km.
+        </p>
+        <table class="tabla">
+          <caption class="solo-lector">Terremotos recientes, del más reciente al más antiguo</caption>
+          <thead><tr><th scope="col">Magnitud</th><th scope="col">Dónde</th><th scope="col" class="der">Distancia</th><th scope="col" class="der">Profundidad</th><th scope="col" class="der">Cuándo</th></tr></thead>
+          <tbody>
+            {% for e in sis.datos[:15] %}
+              <tr class="{{ 'fuerte' if e.mag >= 3 else ('medio' if e.mag >= 2 else '') }}">
+                <td><a class="mag" href="{{ e.url }}" target="_blank" rel="noopener noreferrer" aria-label="Magnitud {{ e.mag }}, ver detalle en EMSC">{{ '%.1f'|format(e.mag) }}</a> <span class="tenue">{{ e.tipo_mag }}</span></td>
+                <td>{{ e.lugar or '—' }}</td>
+                <td class="der">{{ e.km }} km</td>
+                <td class="der">{{ e.prof }} km</td>
+                <td class="der cuando">{{ e.ts|hora }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="pie-tabla tenue">Por debajo de magnitud 2,5 casi nunca se notan. La zona de Granada es la de mayor actividad sísmica de la península.</p>
+      {% else %}
+        <p class="tenue">Ningún terremoto registrado en los últimos {{ cfg.dias_sismos }} días.</p>
+      {% endif %}
+    {% else %}
+      <p class="tenue">{{ 'Sin datos todavía.' if not sis.error else 'No se pudo consultar el EMSC.' }}</p>
+    {% endif %}
+    {{ sello(sis, 'EMSC / IGN') }}
+  </section>
+
+  {# --- Noticias ----------------------------------------------------------- #}
+  <section class="tarjeta-entorno noticias" aria-labelledby="t-noticias">
+    <h2 id="t-noticias">Noticias de {{ cfg.nombre }}</h2>
+    {% if nts.datos %}
+      <ul class="lista-noticias">
+        {% for n in nts.datos %}
+          <li>
+            <a href="{{ n.url }}" target="_blank" rel="noopener noreferrer">{{ n.titulo }}</a>
+            <span class="tenue">{{ n.fuente }}{% if n.ts %}{{ ', ' if n.fuente }}{{ n.ts|hora }}{% endif %}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% elif nts.datos is not none %}
+      <p class="tenue">Las fuentes no devuelven noticias ahora mismo.</p>
+    {% else %}
+      <p class="tenue">{{ 'Sin datos todavía.' if not nts.error else 'No se pudo leer el RSS de noticias.' }}</p>
+    {% endif %}
+    {{ sello(nts, 'RSS') }}
+  </section>
+</div>
+{% endblock %}

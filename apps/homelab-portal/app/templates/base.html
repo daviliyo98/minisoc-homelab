@@ -41,6 +41,14 @@
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 10l4 5M13 5l4 5-4 5"/></svg>
         APIs <span class="cuenta">{{ n_apis }}</span>
       </a>
+      {% set tiempo = entorno.tiempo.datos %}
+      {% set sismos_fuertes = (entorno.sismos.datos or [])|selectattr('mag', 'ge', 3)|selectattr('ts', 'ge', ahora() - 86400)|list %}
+      <a href="/entorno?destino={{ destino }}" {% if seccion == 'entorno' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="M3.5 10h13M10 3.5c2 2 2.8 4.2 2.8 6.5s-.8 4.5-2.8 6.5M10 3.5C8 5.5 7.2 7.7 7.2 10s.8 4.5 2.8 6.5"/></svg>
+        Entorno
+        {% if sismos_fuertes %}<span class="cuenta mal" aria-label="Terremoto de magnitud 3 o más en las últimas 24 horas">M{{ sismos_fuertes[0].mag }}</span>
+        {% elif tiempo %}<span class="cuenta" aria-label="{{ tiempo.temp }} grados en {{ entorno.config.nombre }}">{{ tiempo.temp }}°</span>{% endif %}
+      </a>
     </nav>
 
     {% if stacks %}

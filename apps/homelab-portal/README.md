@@ -83,6 +83,7 @@ curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services \
 | `/` | Servicios (HTML): lista y ficha del servicio elegido (`?sel=Grafana`) |
 | `/alertas` | Registro de caídas y recuperaciones de los últimos días |
 | `/apis` | Todos los endpoints de API del catálogo, con la URL completa |
+| `/entorno` | Tiempo, terremotos cercanos y noticias de la zona de la Pi |
 | `/api/services` | Catálogo en JSON, con sondas opcionales |
 | `/api/eventos` | Cambios de estado en JSON (`?servicio=`, `?limite=`) |
 | `/api/config` | Chequeo de configuración del despliegue |
@@ -124,6 +125,41 @@ dependiera de cuándo abres la página, una caída de madrugada no existiría.
 
 `/api/eventos` sirve para enganchar un aviso (Telegram, ntfy) o mandar los cambios a
 un SIEM sin tocar el portal.
+
+## Entorno: tiempo, terremotos y noticias
+
+`app/entorno.py` consulta tres fuentes públicas **sin clave de API** cada
+`PORTAL_ENTORNO_CADA` segundos (900 por defecto):
+
+| Bloque | Fuente |
+|---|---|
+| Tiempo y previsión de 7 días | [Open-Meteo](https://open-meteo.com) |
+| Terremotos en un radio | [EMSC / seismicportal.eu](https://www.seismicportal.eu) (incluye datos del IGN) |
+| Noticias | RSS; por defecto Google News de la ciudad |
+
+La ubicación por defecto es Granada a nivel de ciudad. Se cambia sin reconstruir
+añadiendo a `services.yaml`:
+
+```yaml
+entorno:
+  nombre: Granada
+  lat: 37.1773
+  lon: -3.5986
+  radio_km: 150          # terremotos a menos de esta distancia
+  dias_sismos: 7
+  noticias:              # opcional: tus propios RSS en vez de Google News
+    - https://www.ideal.es/rss/2.0/?section=granada
+```
+
+Decisiones de seguridad, porque esto es lo único del portal que lee datos de internet:
+
+- **La consulta la hace la Pi, no el navegador.** La CSP sigue en `'self'` y el
+  navegador no avisa a terceros de que estás mirando el panel.
+- **Lo que llega de fuera es dato no confiable.** RSS con `defusedxml` (bloquea XXE y
+  "billion laughs"), tamaño máximo por respuesta, enlaces solo `http`/`https` (un
+  `javascript:` se descarta) y autoescape de Jinja en los titulares.
+- **Una fuente caída no rompe nada**: se conserva el último dato bueno y se indica
+  la hora y el error del último intento.
 
 ## Seguridad
 
