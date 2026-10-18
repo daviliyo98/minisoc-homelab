@@ -355,7 +355,7 @@ tr.mal .vigente { color: var(--error); }
     border-right: 0; border-bottom: 1px solid var(--linea);
   }
   .marca { padding: 0; margin-right: auto; }
-  .menu { flex-direction: row; order: 3; width: 100%; overflow-x: auto; }
+  .menu { flex-direction: row; order: 3; width: 100%; min-width: 0; overflow-x: auto; }
   .menu a { flex: none; }
   .stacks { display: none; }
   .lateral-pie { margin: 0; padding: 0; border: 0; display: flex; align-items: center; }
@@ -375,4 +375,87 @@ tr.mal .vigente { color: var(--error); }
   .tabla tr { padding: 0.6rem 0; border-bottom: 1px solid var(--linea); }
   .tabla td { border: 0; padding: 0.1rem 0; text-align: left; }
   .grupo-api td:first-child { width: auto; }
+}
+
+/* --- Entorno: tiempo, terremotos y noticias ---------------------------------- */
+.pagina.entorno {
+  max-width: 1280px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: "tiempo tiempo" "sismos noticias";
+  gap: 1.25rem;
+  align-items: start;
+}
+.tarjeta-entorno {
+  background: var(--chasis);
+  border: 1px solid var(--linea);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem 1rem;
+  min-width: 0;
+}
+.tarjeta-entorno.tiempo { grid-area: tiempo; }
+.tarjeta-entorno.sismos { grid-area: sismos; }
+.tarjeta-entorno.noticias { grid-area: noticias; }
+.tarjeta-entorno h2 { font: 600 1.2rem var(--estrecha); letter-spacing: 0.01em; margin-bottom: 0.75rem; }
+.tarjeta-entorno > p.tenue { margin: 0; }
+.sello { margin: 0.9rem 0 0; font-size: 0.8rem; color: var(--tenue); }
+.sello-error { color: var(--parcial); }
+
+.icono-tiempo { width: 1.6rem; height: 1.6rem; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.icono-tiempo.grande { width: 3.4rem; height: 3.4rem; stroke-width: 1.4; color: var(--parcial); }
+
+.ahora-tiempo { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.1rem; }
+.temp { margin: 0; font: 600 4rem/0.9 var(--estrecha); letter-spacing: -0.02em; }
+.estado-cielo { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.ahora-tiempo .tenue { margin: 0.15rem 0 0; font-size: 0.9rem; }
+
+.dias {
+  list-style: none; margin: 1.25rem 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.5rem;
+}
+.dias li {
+  position: relative;   /* contiene los .solo-lector: si no, escapan del scroll y ensanchan la página */
+  display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
+  padding: 0.7rem 0.25rem;
+  border-radius: 9px;
+  background: var(--fondo);
+  border: 1px solid var(--linea);
+}
+.dias li.hoy { border-color: var(--linea-fuerte); background: var(--panel); }
+.dia-nombre { font-weight: 600; text-transform: capitalize; }
+.dias .icono-tiempo { color: var(--tenue); }
+.dia-max { font: 600 1.3rem/1 var(--estrecha); }
+.dia-min { color: var(--tenue); font-size: 0.88rem; }
+.dia-lluvia { font-size: 0.8rem; color: var(--tenue); }
+.dia-lluvia.alta { color: var(--enlace); font-weight: 600; }
+
+.resumen-sismos { margin: 0 0 0.6rem; color: var(--tenue); }
+.resumen-sismos strong { color: var(--error); }
+.sismos .tabla td, .sismos .tabla th { padding-left: 0.5rem; padding-right: 0.5rem; }
+.mag {
+  display: inline-block; min-width: 2.4rem; text-align: center;
+  padding: 0.05rem 0.4rem; border-radius: 5px;
+  background: var(--panel); border: 1px solid var(--linea-fuerte);
+  font: 600 1.05rem var(--estrecha);
+}
+.sismos .tabla td a.mag { color: var(--texto); }
+.sismos tr.medio .mag { border-color: var(--parcial); color: var(--parcial); }
+.sismos tr.fuerte .mag { background: var(--error); border-color: var(--error); color: var(--boton-texto); }
+
+.lista-noticias { list-style: none; margin: 0; padding: 0; }
+.lista-noticias li { padding: 0.65rem 0; border-top: 1px solid var(--linea); }
+.lista-noticias li:first-child { border-top: 0; padding-top: 0; }
+.lista-noticias a { display: block; color: var(--texto); font-weight: 500; text-decoration: none; line-height: 1.35; }
+.lista-noticias a:hover { text-decoration: underline; color: #fff; }
+.lista-noticias .tenue { display: block; margin-top: 0.2rem; font-size: 0.82rem; }
+
+@media (max-width: 1100px) {
+  .pagina.entorno { grid-template-columns: minmax(0, 1fr); grid-template-areas: "tiempo" "sismos" "noticias"; }
+}
+@media (max-width: 720px) {
+  .dias { grid-template-columns: repeat(7, 4.2rem); overflow-x: auto; padding-bottom: 0.3rem; }
+  .temp { font-size: 3.3rem; }
+  .tarjeta-entorno { padding: 1rem; }
+  .sismos .tabla tr { display: grid; grid-template-columns: auto 1fr auto; gap: 0 0.75rem; align-items: baseline; }
+  .sismos .tabla td:nth-child(4) { display: none; }
 }
