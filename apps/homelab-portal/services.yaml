@@ -30,9 +30,9 @@ services:
 
   - name: Pi-hole
     description: "Sinkhole DNS: publicidad, rastreo y amenazas"
-    scheme: https            # certificado autofirmado (CN=pi.hole)
-    port: 443
-    path: "/admin"           # la raíz devuelve 403: el panel vive en /admin
+    scheme: http            # certificado autofirmado (CN=pi.hole)
+    port: 80
+    path: "/admin/login"           # la raíz devuelve 403: el panel vive en /admin
     icon: "🛡️"
     stack: dns
     health: { type: http, path: /admin/, verify: false }
