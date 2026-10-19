@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block titulo %}Salud de la Pi{% endblock %}
+
+{% macro num(v, dec) -%}
+  {%- if v is none -%}—{%- else -%}{{ ('%.' ~ dec ~ 'f')|format(v)|replace('.', ',') }}{%- endif -%}
+{%- endmacro %}
+
+{% macro nivel_txt(n) -%}
+  {%- if n == 'critico' %}Crítico{% elif n == 'aviso' %}Vigilar{% elif n == 'ok' %}En rango{% else %}Sin datos{% endif -%}
+{%- endmacro %}
+
+{% block contenido %}
+{% set ex = salud.extra or {} %}
+<header class="cabecera">
+  <div class="cabecera-fila">
+    <h1>Salud de la Pi</h1>
+    {% if url_grafana %}<a class="boton-sec pequeno" href="{{ url_grafana }}" target="_blank" rel="noopener noreferrer">Abrir Grafana</a>{% endif %}
+  </div>
+  <p class="frescura">
+    {% if salud.ts %}Datos de Prometheus (node-exporter) a las <time>{{ salud.ts|hora }}</time>; gráficas de la última hora.{% endif %}
+    {% if ex.uptime %} Encendida desde hace {{ ex.uptime|duracion }}.{% endif %}
+  </p>
+</header>
+
+{% if salud.error %}
+  <p class="aviso aviso-pagina">No se pudo consultar Prometheus ({{ salud.error }}).
+    {% if salud.ts %}Se muestran los últimos datos buenos, de las {{ salud.ts|hora }}.{% else %}¿Está levantado el stack de monitorización?{% endif %}</p>
+{% endif %}
+
+<div class="pagina">
+  {% if salud.metricas %}
+  <ul class="metricas">
+    {% for m in salud.metricas %}
+      <li class="metrica nivel-{{ m.nivel }}">
+        <div class="metrica-cabecera">
+          <h2>{{ m.nombre }}</h2>
+          {% if m.umbral %}
+            <span class="metrica-nivel"><span class="led" aria-hidden="true"></span>{{ nivel_txt(m.nivel) }}</span>
+          {% endif %}
+        </div>
+        <p class="metrica-valor">{{ num(m.valor, m.decimales) }}<span>{{ m.unidad }}</span></p>
+        {% if m.chispa %}
+          {% set c = m.chispa %}
+          <svg class="chispa" viewBox="0 0 {{ c.ancho }} {{ c.alto }}" preserveAspectRatio="none" role="img"
+               aria-label="{{ m.nombre }} en la última hora: mínimo {{ num(m.min, m.decimales) }}{{ m.unidad }}, máximo {{ num(m.max, m.decimales) }}{{ m.unidad }}">
+            <polygon class="chispa-area" points="{{ c.area }}"/>
+            <polyline class="chispa-linea" points="{{ c.linea }}" vector-effect="non-scaling-stroke"/>
+            <circle class="chispa-punto" cx="{{ c.ultimo[0] }}" cy="{{ c.ultimo[1] }}" r="3"/>
+            {% for z in c.zonas %}<rect class="chispa-zona" x="{{ z.x }}" y="0" width="{{ z.w }}" height="{{ c.alto }}"><title>{{ z.ts|hora }}: {{ num(z.v, m.decimales) }}{{ m.unidad }}</title></rect>{% endfor %}
+          </svg>
+          <p class="metrica-rango"><span>hace 1 h</span><span>mín. {{ num(m.min, m.decimales) }}, máx. {{ num(m.max, m.decimales) }}</span><span>ahora</span></p>
+        {% else %}
+          <p class="tenue metrica-sin">Sin serie: Prometheus no tiene esta métrica.</p>
+        {% endif %}
+        <p class="metrica-ayuda">{{ m.ayuda }}
+          {%- if m.clave == 'ram' and ex.ram_total %} Total: {{ num(ex.ram_total / 1073741824, 1) }} GB.{% endif %}
+          {%- if m.clave == 'disco' and ex.disco_libre %} Libres: {{ num(ex.disco_libre / 1073741824, 1) }} GB.{% endif %}
+          {%- if m.umbral %} Umbral de aviso: {{ num(m.umbral[0], 0) }}{{ m.unidad }}.{% endif %}</p>
+      </li>
+    {% endfor %}
+  </ul>
+
+  <details class="tabla-datos">
+    <summary>Ver como tabla</summary>
+    <table class="tabla">
+      <thead><tr><th scope="col">Métrica</th><th scope="col" class="der">Ahora</th><th scope="col" class="der">Mín. 1 h</th><th scope="col" class="der">Máx. 1 h</th><th scope="col">Estado</th></tr></thead>
+      <tbody>
+        {% for m in salud.metricas %}
+          <tr><td>{{ m.nombre }}</td><td class="der">{{ num(m.valor, m.decimales) }} {{ m.unidad }}</td>
+              <td class="der">{{ num(m.min, m.decimales) }}</td><td class="der">{{ num(m.max, m.decimales) }}</td>
+              <td>{{ nivel_txt(m.nivel) if m.umbral else '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% elif not salud.error %}
+    <div class="vacio"><p class="vacio-titulo">Recogiendo datos…</p><p>La primera consulta a Prometheus se hace al arrancar el portal.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

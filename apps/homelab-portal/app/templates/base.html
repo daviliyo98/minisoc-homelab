@@ -48,6 +48,13 @@
         {% if dispositivos.nuevos %}<span class="cuenta aviso" aria-label="{{ dispositivos.nuevos|length }} dispositivo{{ 's' if dispositivos.nuevos|length != 1 }} nuevo{{ 's' if dispositivos.nuevos|length != 1 }} sin identificar">{{ dispositivos.nuevos|length }} nuevo{{ 's' if dispositivos.nuevos|length != 1 }}</span>
         {% elif dispositivos.ts %}<span class="cuenta" aria-label="{{ activos|length }} en la red">{{ activos|length }}</span>{% endif %}
       </a>
+      {% set peor = 'critico' if salud.metricas|selectattr('nivel', 'equalto', 'critico')|list else ('aviso' if salud.alertas else '') %}
+      <a href="/salud?destino={{ destino }}" {% if seccion == 'salud' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10.5h3.2l2-5 3.3 9 2.2-4h4.3"/></svg>
+        Salud
+        {% if salud.alertas %}<span class="cuenta {{ 'mal' if peor == 'critico' else 'aviso' }}" aria-label="{{ salud.alertas }} métrica{{ 's' if salud.alertas != 1 }} fuera de rango">{{ salud.alertas }}</span>
+        {% elif salud.ts %}<span class="cuenta" aria-label="Todo en rango">OK</span>{% endif %}
+      </a>
       {% set tiempo = entorno.tiempo.datos %}
       {% set sismos_fuertes = (entorno.sismos.datos or [])|selectattr('mag', 'ge', 3)|selectattr('ts', 'ge', ahora() - 86400)|list %}
       <a href="/entorno?destino={{ destino }}" {% if seccion == 'entorno' %}aria-current="page"{% endif %}>

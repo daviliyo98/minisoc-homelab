@@ -84,6 +84,7 @@ curl -s -u admin:CLAVE http://100.114.119.53:8090/api/services \
 | `/alertas` | Registro de caídas y recuperaciones de los últimos días |
 | `/apis` | Todos los endpoints de API del catálogo, con la URL completa |
 | `/entorno` | Tiempo, terremotos cercanos y noticias de la zona de la Pi |
+| `/salud` | Salud de la Pi: CPU, temperatura, memoria, swap, disco, espera de disco, carga y red |
 | `/dispositivos` | Aparatos de la red: conectados o no y qué consultan por DNS |
 | `/api/services` | Catálogo en JSON, con sondas opcionales |
 | `/api/eventos` | Cambios de estado en JSON (`?servicio=`, `?limite=`) |
@@ -169,6 +170,23 @@ Decisiones de seguridad, porque esto es lo único del portal que lee datos de in
   `javascript:` se descarta) y autoescape de Jinja en los titulares.
 - **Una fuente caída no rompe nada**: se conserva el último dato bueno y se indica
   la hora y el error del último intento.
+
+## Salud de la Pi
+
+`app/salud.py` lee de **Prometheus** (`PROMETHEUS_URL`, por defecto
+`http://127.0.0.1:9090`) las mismas métricas de node-exporter que pinta Grafana y
+las enseña con su gráfica de la última hora: CPU, temperatura, memoria, swap,
+disco, espera de disco (el `wa` de `top`), carga y tráfico de red. Se consulta cada
+minuto en segundo plano; si Prometheus cae, la página lo dice y conserva el último
+dato bueno.
+
+Cada métrica tiene umbral de aviso y crítico pensados para una Pi 4 (por ejemplo,
+temperatura 70/80 °C: a partir de 80 °C la Pi baja la frecuencia). Las que están
+fuera de rango cuentan en el menú. En JSON: `/api/salud`.
+
+Las gráficas se dibujan en SVG en el servidor: sin JavaScript ni estilos en línea, así
+que la CSP estricta sigue intacta. Al pasar el ratón por la línea, cada minuto
+muestra su valor; hay también una vista de tabla.
 
 ## Dispositivos: inventario IoT
 

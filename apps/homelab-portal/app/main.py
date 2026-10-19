@@ -23,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import catalog, dispositivos, entorno, health, history
+from . import catalog, dispositivos, entorno, health, history, salud
 
 # Rutas relativas al propio paquete, no al WORKDIR: el Dockerfile hace
 # `COPY app ./app`, así que el código vive en /app/app y los estáticos en
@@ -47,6 +47,7 @@ async def ciclo_de_vida(_app: FastAPI):
         asyncio.create_task(history.muestreador()),
         asyncio.create_task(entorno.actualizador()),
         asyncio.create_task(dispositivos.actualizador()),
+        asyncio.create_task(salud.actualizador()),
     ]
     try:
         yield
@@ -191,6 +192,7 @@ async def _comun(request: Request, destino: str, seccion: str) -> dict[str, Any]
         "historial": history.disponible(),
         "entorno": entorno.estado(),
         "dispositivos": dispositivos.estado(),
+        "salud": salud.estado(),
         "todos": servicios,
         "estados": estados,
         "caidos": caidos,
@@ -306,6 +308,26 @@ async def pagina_dispositivos(
     lista = ctx["dispositivos"]["lista"]
     ctx["ficha_disp"] = next((d for d in lista if d["mac"] == sel.lower()), None) or (lista[0] if lista else None)
     return plantillas.TemplateResponse(request, "dispositivos.html", ctx)
+
+
+@app.get("/salud", response_class=HTMLResponse)
+async def pagina_salud(request: Request, destino: str = DESTINO, _user: str = Depends(_exigir)):
+    """Estado de la propia Pi (CPU, temperatura, memoria, disco) desde Prometheus."""
+    ctx = await _comun(request, destino, "salud")
+    grafana = next((s for s in ctx["todos"] if s["name"] == "Grafana"), None)
+    ctx["url_grafana"] = grafana["url"] if grafana else None
+    return plantillas.TemplateResponse(request, "salud.html", ctx)
+
+
+@app.get("/api/salud")
+async def api_salud(_user: str = Depends(_exigir)):
+    """Valores actuales de salud de la Pi en JSON (sin las series)."""
+    e = salud.estado()
+    return {
+        "ts": e["ts"], "error": e["error"], "extra": e["extra"],
+        "metricas": [{k: m[k] for k in ("clave", "nombre", "unidad", "valor", "nivel", "min", "max")}
+                     for m in e["metricas"]],
+    }
 
 
 @app.get("/apis", response_class=HTMLResponse)

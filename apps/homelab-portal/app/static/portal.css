@@ -561,3 +561,37 @@ tr.mal .vigente { color: var(--error); }
 .ahora.nuevos-red .led { background: var(--parcial); }
 .ahora.nuevos-red > p { margin: 0.2rem 0 0; font-size: 0.85rem; }
 @media (max-width: 720px) { .alerta-nuevos { margin: 0.75rem 1rem 0; } }
+
+/* --- Salud de la Pi ------------------------------------------------------------ */
+.metricas { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); gap: 1rem; }
+.metrica { background: var(--chasis); border: 1px solid var(--linea); border-radius: 12px; padding: 1rem 1.1rem 0.9rem; min-width: 0; }
+.metrica-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.metrica h2 { font: 600 1.05rem var(--estrecha); letter-spacing: 0.01em; }
+.metrica-nivel { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; font-weight: 600; color: var(--ok); }
+.nivel-ok .metrica-nivel .led { background: var(--ok); }
+.nivel-aviso .metrica-nivel { color: var(--parcial); }
+.nivel-aviso .metrica-nivel .led { background: var(--parcial); }
+.nivel-critico .metrica-nivel { color: var(--error); }
+.nivel-critico .metrica-nivel .led { background: var(--error); }
+.nivel-nd .metrica-nivel { color: var(--tenue); }
+.nivel-aviso { border-color: color-mix(in srgb, var(--parcial) 50%, var(--linea)); }
+.nivel-critico { border-color: color-mix(in srgb, var(--error) 60%, var(--linea)); }
+.metrica-valor { margin: 0.35rem 0 0.4rem; font: 600 2.6rem/1 var(--estrecha); letter-spacing: -0.01em; }
+.metrica-valor span { font: 500 1rem var(--sans); color: var(--tenue); margin-left: 0.25rem; }
+
+.chispa { display: block; width: 100%; height: 48px; overflow: visible; }
+.chispa-area { fill: color-mix(in srgb, var(--enlace) 14%, transparent); }
+.chispa-linea { fill: none; stroke: var(--enlace); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chispa-punto { fill: var(--enlace); stroke: var(--chasis); stroke-width: 2; }
+.nivel-aviso .chispa-linea { stroke: var(--parcial); } .nivel-aviso .chispa-punto { fill: var(--parcial); }
+.nivel-aviso .chispa-area { fill: color-mix(in srgb, var(--parcial) 14%, transparent); }
+.nivel-critico .chispa-linea { stroke: var(--error); } .nivel-critico .chispa-punto { fill: var(--error); }
+.nivel-critico .chispa-area { fill: color-mix(in srgb, var(--error) 14%, transparent); }
+.chispa-zona { fill: transparent; }
+.chispa-zona:hover { fill: color-mix(in srgb, var(--texto) 10%, transparent); }
+.metrica-rango { display: flex; justify-content: space-between; gap: 0.5rem; margin: 0.3rem 0 0; font-size: 0.75rem; color: var(--tenue); }
+.metrica-sin { margin: 0.4rem 0 0; font-size: 0.85rem; }
+.metrica-ayuda { margin: 0.6rem 0 0; padding-top: 0.6rem; border-top: 1px solid var(--linea); font-size: 0.82rem; color: var(--tenue); }
+.tabla-datos { margin-top: 1.5rem; }
+.tabla-datos summary { color: var(--enlace); cursor: pointer; font-weight: 500; }
+.tabla-datos .tabla { margin-top: 0.6rem; }
