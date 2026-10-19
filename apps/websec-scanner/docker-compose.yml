@@ -59,26 +59,37 @@ services:
     image: ghcr.io/zaproxy/zaproxy:stable
     container_name: websec-zap
     profiles: ["zap"]
+    # init: zap.sh hace `exec java`, así que sin esto Java es el PID 1 del
+    # contenedor y "adopta" los procesos huérfanos del Firefox headless del
+    # spider sin recogerlos nunca: 127 zombis en 9 días (HL-013). Con init: true,
+    # tini es el PID 1 y los recoge.
+    init: true
     # api.addrs.*: permite que el scanner (otra IP de la red Docker) use la API.
     # api.key: clave obligatoria para toda llamada a la API (ver .env.example).
+    # -Xmx1g va AQUÍ, como argumento de zap.sh: zap.sh calcula su propio -Xmx
+    # (1/4 de la RAM del host, porque sin cgroup de memoria no ve el límite del
+    # contenedor, HL-004) y la línea de comandos gana a JAVA_TOOL_OPTIONS.
     command: >
-      zap.sh -daemon -host 0.0.0.0 -port 8080
+      zap.sh -Xmx1g -daemon -host 0.0.0.0 -port 8080
       -config api.key=${ZAP_API_KEY:-}
       -config api.addrs.addr.name=.*
       -config api.addrs.addr.regex=true
       -config database.recoverylog=false
-    environment:
-      JAVA_TOOL_OPTIONS: "-Xmx1g"
     expose:
       - "8080"                     # visible solo dentro de la red de Docker
     security_opt:
       - no-new-privileges:true
-    # ZAP auto-dimensiona su heap a ~1/4 de la RAM del host (en la Pi de 8 GB,
-    # ~2 GB). El límite del contenedor debe quedar POR ENCIMA de ese heap o el
-    # kernel mata ZAP por OOM (se vio como ReadTimeout al recoger alertas en
-    # sitios reales con páginas grandes). Damos holgura: 2,5 GB.
+    # El límite del contenedor debe quedar POR ENCIMA del heap (-Xmx) más el
+    # Firefox del spider, o el kernel mata ZAP por OOM (se vio como ReadTimeout
+    # al recoger alertas en sitios con páginas grandes). Si con -Xmx1g ZAP da
+    # OutOfMemoryError en un sitio grande, sube a -Xmx1536m. Nota: mem_limit lo
+    # ignora este kernel hasta aplicar HL-004.
     mem_limit: 2560m
-    restart: unless-stopped
+    # Sin restart: ZAP es una herramienta, no un servicio. Con unless-stopped,
+    # arrancarlo una vez lo dejaba encendido para siempre (también tras reiniciar
+    # la Pi). Se levanta para escanear y se apaga después:
+    #   docker compose --profile zap up -d zap   ...   docker compose stop zap
+    restart: "no"
 
 volumes:
   websec-data:
