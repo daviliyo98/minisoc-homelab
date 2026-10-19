@@ -192,11 +192,16 @@ Configure app password*), no la de administrador: se revoca sin tocar la princip
 El portal abre **una** sesión y la reutiliza (Pi-hole limita las sesiones
 simultáneas) y la cierra al apagarse.
 
-Los nombres de los aparatos van en `privado/dispositivos.yaml`, **fuera del repo**
-(está en `.gitignore`): un repo público no debe listar lo que hay en tu casa.
-Plantilla en `dispositivos.example.yaml`. Lo que Pi-hole ve y no está en el
-inventario aparece como *sin identificar*, en ámbar: un aparato desconocido en la
-red es lo primero que hay que mirar.
+**Los nombres los pone Pi-hole**: *Group Management → Clients*, se da de alta la MAC
+del aparato con un comentario (`Robot aspirador`, o `Robot aspirador | Xiaomi T12`
+para añadir el modelo). El portal solo los lee, así que sigue sin escribir nada a
+partir del navegador: sin formularios, sin CSRF y sin permisos de escritura. Además,
+el mismo cliente sirve para aplicarle en Pi-hole grupos de bloqueo propios (por
+ejemplo, uno más estricto para el IoT). También vale un cliente dado de alta por IP
+si el aparato la tiene reservada en el router.
+
+Lo que no está dado de alta aparece como *sin identificar*, en ámbar: un aparato
+desconocido en la red es lo primero que hay que mirar.
 
 Si un aparato está conectado pero no tiene consultas DNS, probablemente usa un DNS
 fijado de fábrica y se salta Pi-hole (como el iPhone en HL-003).

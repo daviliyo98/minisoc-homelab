@@ -49,8 +49,6 @@ services:
       - ./services.yaml:/app/services.yaml:ro   # el catálogo se edita sin reconstruir
       # Único sitio escribible del contenedor (read_only: true): la SQLite del historial.
       - portal-data:/data
-      # Inventario de aparatos de casa (qué MAC es el robot). Fuera del repo público.
-      - ./privado:/app/privado:ro
     read_only: true
     tmpfs:
       - /tmp

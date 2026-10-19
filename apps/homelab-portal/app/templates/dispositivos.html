@@ -69,7 +69,6 @@
         <span class="led" aria-hidden="true"></span>
         <span>{{ estado_txt(d.estado) }}{% if d.ultima_dns %}<span class="pastilla-dura">, última consulta DNS a las {{ d.ultima_dns|hora }}</span>{% endif %}</span>
       </p>
-      {% if d.nota %}<p class="ficha-desc">{{ d.nota }}</p>{% endif %}
     </div>
 
     <dl class="datos">
@@ -79,18 +78,23 @@
       <div><dt>Nombre en la red</dt><dd>{{ d.nombre_red or '—' }}</dd></div>
     </dl>
 
+    {% set url_pihole = 'http://' ~ red.get('lan', '127.0.0.1') ~ '/admin/groups/clients' %}
     {% if not d.conocido %}
       <section class="bloque identificar" aria-labelledby="t-ident">
         <h3 id="t-ident">¿Qué aparato es?</h3>
-        <p class="tenue">Ponle nombre añadiéndolo a <code>privado/dispositivos.yaml</code> (fuera del repo). Se aplica en el siguiente refresco, sin reiniciar:</p>
-        <pre class="codigo"><code>dispositivos:
-  - mac: "{{ d.mac }}"
-    nombre: "Nombre del aparato"
-    tipo: "Marca y modelo"</code></pre>
-        <button type="button" class="boton-sec pequeno" data-copiar='  - mac: "{{ d.mac }}"
-    nombre: "Nombre del aparato"
-    tipo: "Marca y modelo"'>Copiar bloque</button>
+        {% if dispositivos.pihole %}
+          <ol class="pasos">
+            <li>Copia su MAC: <button type="button" class="boton-sec pequeno" data-copiar="{{ d.mac }}">Copiar {{ d.mac }}</button></li>
+            <li>En Pi-hole, <a href="{{ url_pihole }}" target="_blank" rel="noopener noreferrer">Group Management → Clients</a>: pégala como cliente y escribe el nombre en <em>Comment</em>, por ejemplo <code>Robot aspirador | Xiaomi T12</code>.</li>
+            <li>El portal lo recoge en el siguiente refresco (1 min).</li>
+          </ol>
+        {% else %}
+          <p class="tenue">Los nombres salen de los clientes de Pi-hole: añade <code>PIHOLE_PASSWORD</code> al <code>.env</code> del portal.</p>
+        {% endif %}
       </section>
+    {% else %}
+      <p class="tenue cambiar-nombre">El nombre viene de Pi-hole. Para cambiarlo, edita el comentario del cliente en
+        <a href="{{ url_pihole }}" target="_blank" rel="noopener noreferrer">Group Management → Clients</a>.</p>
     {% endif %}
 
     <section class="bloque" aria-labelledby="t-dns">

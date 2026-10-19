@@ -7,10 +7,13 @@ Qué se quiere saber de cada aparato (robot aspirador, Alexa...):
 - ¿Qué hace en la red? -> API de Pi-hole v6: cuántas consultas DNS hace, a qué
   dominios y cuántas le bloquea. Es la telemetría que el aparato manda "a casa".
 
-Nombres: el inventario (qué MAC es el robot) vive en privado/dispositivos.yaml,
-fuera del repositorio: un repo público no debe listar los aparatos de tu casa.
-Lo que Pi-hole ve y no está en el inventario se muestra como "sin identificar":
-un dispositivo desconocido en la red es justo lo que un SOC quiere ver primero.
+Nombres: los pone Pi-hole, no el portal. En Pi-hole > Group Management > Clients
+se da de alta cada aparato por su MAC con un comentario ("Robot aspirador", o
+"Robot aspirador | Xiaomi T12" para añadir el modelo). El portal solo lo LEE:
+sigue sin escribir nada a partir del navegador, así que no necesita protección
+CSRF ni permisos de escritura. Y el mismo cliente sirve en Pi-hole para aplicarle
+grupos de bloqueo propios. Lo que no está dado de alta aparece como "sin
+identificar": un aparato desconocido en la red es lo primero que hay que mirar.
 
 Credenciales de Pi-hole: PIHOLE_PASSWORD en .env. Mejor una "contraseña de
 aplicación" (Pi-hole > Settings > Web interface / API) que la de administrador:
@@ -28,13 +31,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import yaml
 
 log = logging.getLogger("portal.dispositivos")
 
 CADA = max(30, int(os.environ.get("PORTAL_DISPOSITIVOS_CADA", "60")))
 RUTA_ARP = Path(os.environ.get("PORTAL_ARP", "/proc/net/arp"))
-RUTA_INVENTARIO = Path(os.environ.get("PORTAL_INVENTARIO", "/app/privado/dispositivos.yaml"))
 PIHOLE_API = os.environ.get("PIHOLE_API", "http://127.0.0.1/api").rstrip("/")
 PIHOLE_CLAVE = os.environ.get("PIHOLE_PASSWORD", "")
 ACTIVO_SI_DNS_EN = 15 * 60           # una consulta DNS en 15 min = está activo
@@ -58,6 +59,11 @@ def estado() -> dict[str, Any]:
 def _mac(valor: str | None) -> str:
     return (valor or "").strip().lower().replace("-", ":")
 
+
+import re
+
+_MAC = re.compile(r"^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$")
+_IP = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 # Redes internas del propio host: contenedores Docker y Tailscale no son aparatos de casa.
 _INTERFACES_VIRTUALES = ("docker", "br-", "veth", "tailscale", "lo", "virbr")
@@ -85,26 +91,6 @@ def leer_arp(ruta: Path = RUTA_ARP) -> dict[str, dict[str, Any]]:
         if mac in ("", "00:00:00:00:00:00") or _es_virtual(mac, interfaz):
             continue
         salida[mac] = {"ip": ip, "completo": flags == "0x2", "interfaz": interfaz}
-    return salida
-
-
-def inventario(ruta: Path = RUTA_INVENTARIO) -> dict[str, dict[str, Any]]:
-    """MAC -> {nombre, tipo, nota}. Un fichero ausente o roto no rompe la página."""
-    try:
-        datos = yaml.safe_load(ruta.read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        return {}
-    except (OSError, yaml.YAMLError) as exc:
-        log.warning("Inventario ilegible (%s): %s", ruta, exc)
-        return {}
-    salida = {}
-    for d in datos.get("dispositivos") or []:
-        if isinstance(d, dict) and d.get("mac"):
-            salida[_mac(str(d["mac"]))] = {
-                "nombre": str(d.get("nombre") or d["mac"])[:60],
-                "tipo": str(d.get("tipo") or "")[:30],
-                "nota": str(d.get("nota") or "")[:200],
-            }
     return salida
 
 
@@ -155,6 +141,29 @@ async def cerrar_sesion(cliente: httpx.AsyncClient | None = None) -> None:
             await cliente.aclose()
 
 
+def _comentario(texto: str) -> dict[str, str]:
+    """"Robot aspirador | Xiaomi T12" -> nombre y tipo. Sin "|", todo es el nombre."""
+    nombre, _, tipo = (texto or "").partition("|")
+    return {"nombre": nombre.strip()[:60], "tipo": tipo.strip()[:40]}
+
+
+async def _clientes(cliente: httpx.AsyncClient) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
+    """Clientes dados de alta en Pi-hole con comentario: por MAC y por IP."""
+    j = await _api(cliente, "/clients")
+    por_mac: dict[str, dict[str, str]] = {}
+    por_ip: dict[str, dict[str, str]] = {}
+    for c in j.get("clients") or []:
+        ident = str(c.get("client") or "").strip()
+        datos = _comentario(str(c.get("comment") or ""))
+        if not ident or not datos["nombre"]:
+            continue
+        if _MAC.match(ident.lower()):
+            por_mac[_mac(ident)] = datos
+        elif _IP.match(ident):
+            por_ip[ident] = datos
+    return por_mac, por_ip
+
+
 async def _actividad(cliente: httpx.AsyncClient, ip: str, ahora: int) -> dict[str, Any]:
     """Consultas DNS de las últimas 24 h de una IP: total, bloqueadas y dominios."""
     j = await _api(cliente, "/queries", client_ip=ip, length=MAX_CONSULTAS, **{"from": ahora - 86400, "until": ahora})
@@ -186,19 +195,15 @@ async def _actividad(cliente: httpx.AsyncClient, ip: str, ahora: int) -> dict[st
 async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
     ahora = int(time.time())
     arp = leer_arp()
-    inv = inventario()
     disp: dict[str, dict[str, Any]] = {}
 
     def base(mac: str) -> dict[str, Any]:
         return disp.setdefault(mac, {
             "mac": mac, "ip": None, "fabricante": "", "nombre_red": "",
             "en_arp": False, "ultima_dns": None, "actividad": None,
-            **inv.get(mac, {"nombre": "", "tipo": "", "nota": ""}),
-            "conocido": mac in inv,
+            "nombre": "", "tipo": "", "conocido": False,
         })
 
-    for mac in inv:
-        base(mac)
     for mac, a in arp.items():
         d = base(mac)
         d.update(ip=a["ip"], en_arp=a["completo"])
@@ -221,6 +226,13 @@ async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
                 if ips:
                     d["ip"] = d["ip"] or ips[0].get("ip")
                     d["nombre_red"] = str(ips[0].get("name") or "")[:80]
+            # Nombres: los clientes dados de alta en Pi-hole (por MAC, o por IP fija).
+            por_mac, por_ip = await _clientes(cliente)
+            for mac, datos in por_mac.items():
+                base(mac).update(datos, conocido=True)   # aunque hoy no esté conectado
+            for d in disp.values():
+                if not d["conocido"] and d["ip"] in por_ip:
+                    d.update(por_ip[d["ip"]], conocido=True)
             # Actividad solo de lo que importa: inventariados y lo visto hoy.
             objetivo = [d for d in disp.values()
                         if d["ip"] and (d["conocido"] or (d["ultima_dns"] or 0) > ahora - 86400)]

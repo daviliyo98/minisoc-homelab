@@ -302,7 +302,6 @@ async def pagina_dispositivos(
     ctx = await _comun(request, destino, "dispositivos")
     lista = ctx["dispositivos"]["lista"]
     ctx["ficha_disp"] = next((d for d in lista if d["mac"] == sel.lower()), None) or (lista[0] if lista else None)
-    ctx["ruta_inventario"] = str(dispositivos.RUTA_INVENTARIO)
     return plantillas.TemplateResponse(request, "dispositivos.html", ctx)
 
 

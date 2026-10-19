@@ -28,7 +28,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# Inventario privado del portal (MAC y nombres de los aparatos de casa)
+# Inventario antiguo del portal (ya no se usa: los nombres viven en Pi-hole)
 apps/homelab-portal/privado/
 
 # Home Assistant: base de datos y tokens de Xiaomi/Amazon en claro

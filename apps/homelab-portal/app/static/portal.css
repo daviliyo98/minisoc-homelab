@@ -537,3 +537,6 @@ tr.mal .vigente { color: var(--error); }
   .aviso-pagina { margin: 0.75rem 1rem 0; }
   .fila-disp { grid-template-columns: 0.75rem minmax(0, 1fr) auto auto; }
 }
+.pasos { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.88rem; display: grid; gap: 0.5rem; }
+.pasos code { overflow-wrap: anywhere; }
+.cambiar-nombre { margin: 0; font-size: 0.85rem; }
