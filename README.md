@@ -131,11 +131,16 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 | [HL-006](docs/hallazgos/HL-006-contenedor-sin-salida-ipv6.md) | Contenedor sin salida de red por preferencia de IPv6 | Media | Resuelto |
 | [HL-007](docs/hallazgos/HL-007-falso-positivo-securitytxt.md) | Falso positivo en la detección de security.txt (soft-404) | Media | Resuelto |
 | [HL-008](docs/hallazgos/HL-008-grafana-provisioning-sin-permisos.md) | Grafana sin acceso a su carpeta de provisioning (permisos 700) | Media | Resuelto |
+| [HL-009](docs/hallazgos/HL-009-sin-copias-de-seguridad.md) | Copias de seguridad inexistentes pese a marcarse como hechas | Alta | Resuelto (falta la externa) |
+| [HL-010](docs/hallazgos/HL-010-ssh-con-contrasenas.md) | SSH con autenticación por contraseña activa y expuesto a la LAN | Alta | Resuelto |
+| [HL-011](docs/hallazgos/HL-011-host-sin-firewall.md) | Host sin filtrado de tráfico: todas las cadenas en `policy accept` | Alta | Pendiente |
+| [HL-012](docs/hallazgos/HL-012-hardening-desigual.md) | Hardening desigual: 2 de 9 contenedores endurecidos | Media | Pendiente |
 
 ## Runbooks
 
 - [Verificación del filtrado DNS por dispositivo](docs/runbooks/verificacion-dns.md)
 - [homelab-portal: catálogo de servicios, endpoints de API y sondas](apps/homelab-portal/README.md)
+- [Copias de seguridad y restauración](docs/runbooks/backups.md)
 
 ## Competencias demostradas
 
@@ -151,11 +156,14 @@ Cada hallazgo sigue el formato de un informe: evidencia, análisis, impacto, rem
 
 - [x] Filtrado DNS con Pi-hole + Unbound + DNSSEC
 - [x] Parcheo del sistema y limpieza
-- [x] Backups verificados de Pi-hole y Portainer
+- [x] Copias de seguridad verificadas y programadas (repo, .env, etc-pihole,
+      volúmenes Docker y configuración de host; diario a las 04:30)
 - [ ] Cerrar la fuga IPv6 en toda la red (router neutro con OpenWrt/OPNsense)
 - [x] Parches automáticos con ventana de mantenimiento (`unattended-upgrades`, reinicio a las 04:00)
 - [x] Acceso remoto Zero Trust con Tailscale (sin puertos abiertos a Internet)
-- [ ] Hardening del host: SSH con claves, UFW, mínimo privilegio
+- [x] Hardening del host: SSH solo por clave (contraseñas desactivadas)
+- [ ] Hardening del host: firewall con allowlist y mínimo privilegio ([HL-011](docs/hallazgos/HL-011-host-sin-firewall.md))
+- [ ] Hardening de contenedores: `read_only`, `cap_drop` y `no-new-privileges` en los 7 restantes ([HL-012](docs/hallazgos/HL-012-hardening-desigual.md))
 - [ ] Migración del sistema a SSD
 - [x] Detección y respuesta: CrowdSec
 - [x] Métricas: Prometheus + node-exporter + Grafana
