@@ -51,6 +51,9 @@
           </li>
         {% endfor %}
       </ul>
+      {% if dispositivos.ocultos %}
+        <p class="pie-lista tenue">{{ dispositivos.ocultos }} aparato{{ 's' if dispositivos.ocultos != 1 }} sin actividad en las últimas {{ dispositivos.ventana_h|string|replace('.0', '')|replace('.', ',') }} h y sin dar de alta en Pi-hole no se muestra{{ 'n' if dispositivos.ocultos != 1 }}.</p>
+      {% endif %}
     {% else %}
       <div class="vacio">
         <p class="vacio-titulo">Todavía no hay dispositivos.</p>

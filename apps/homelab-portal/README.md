@@ -203,6 +203,12 @@ si el aparato la tiene reservada en el router.
 Lo que no está dado de alta aparece como *sin identificar*, en ámbar: un aparato
 desconocido en la red es lo primero que hay que mirar.
 
+Para que la lista no se llene de aparatos de paso (el móvil de una visita), lo que
+**no** está dado de alta en Pi-hole solo se muestra si se ha visto en las últimas
+`PORTAL_DISPOSITIVOS_VENTANA_H` horas (3 por defecto): en la tabla ARP o con alguna
+consulta DNS. Los dados de alta se muestran siempre, aunque estén apagados. Al pie de
+la lista se indica cuántos quedan ocultos.
+
 Si un aparato está conectado pero no tiene consultas DNS, probablemente usa un DNS
 fijado de fábrica y se salta Pi-hole (como el iPhone en HL-003).
 

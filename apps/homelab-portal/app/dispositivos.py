@@ -39,6 +39,9 @@ RUTA_ARP = Path(os.environ.get("PORTAL_ARP", "/proc/net/arp"))
 PIHOLE_API = os.environ.get("PIHOLE_API", "http://127.0.0.1/api").rstrip("/")
 PIHOLE_CLAVE = os.environ.get("PIHOLE_PASSWORD", "")
 ACTIVO_SI_DNS_EN = 15 * 60           # una consulta DNS en 15 min = está activo
+# Ventana de visibilidad: lo no dado de alta en Pi-hole solo se lista si se ha visto
+# hace menos de esto. Así el móvil de una visita de hace dos semanas no ensucia la lista.
+VENTANA = int(float(os.environ.get("PORTAL_DISPOSITIVOS_VENTANA_H", "3")) * 3600)
 MAX_CONSULTAS = 2000                 # por dispositivo y refresco: una Pi no da para más
 
 # Estados de Pi-hole v6 que significan "bloqueada".
@@ -48,7 +51,8 @@ BLOQUEADAS = {
     "EXTERNAL_BLOCKED_EDE15", "SPECIAL_DOMAIN",
 }
 
-_estado: dict[str, Any] = {"lista": [], "ts": None, "error": None, "pihole": bool(PIHOLE_CLAVE)}
+_estado: dict[str, Any] = {"lista": [], "ocultos": 0, "ventana_h": 3, "ts": None, "error": None,
+                           "pihole": bool(PIHOLE_CLAVE)}
 _sid: str | None = None
 
 
@@ -233,9 +237,8 @@ async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
             for d in disp.values():
                 if not d["conocido"] and d["ip"] in por_ip:
                     d.update(por_ip[d["ip"]], conocido=True)
-            # Actividad solo de lo que importa: inventariados y lo visto hoy.
-            objetivo = [d for d in disp.values()
-                        if d["ip"] and (d["conocido"] or (d["ultima_dns"] or 0) > ahora - 86400)]
+            # Actividad solo de lo que se va a enseñar.
+            objetivo = [d for d in disp.values() if d["ip"] and _visible(d, ahora)]
             resultados = await asyncio.gather(
                 *(_actividad(cliente, d["ip"], ahora) for d in objetivo), return_exceptions=True
             )
@@ -258,11 +261,19 @@ async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
         d["pct_bloqueo"] = round(100 * act["bloqueadas"] / act["muestra"]) if act and act["muestra"] else None
 
     orden = {"activo": 0, "conectado": 1, "ausente": 2}
+    visibles = [d for d in disp.values() if _visible(d, ahora)]
     _estado.update(
-        lista=sorted(disp.values(), key=lambda d: (not d["conocido"], orden[d["estado"]], d["ip"] or "~")),
+        lista=sorted(visibles, key=lambda d: (not d["conocido"], orden[d["estado"]], d["ip"] or "~")),
+        ocultos=len(disp) - len(visibles),
+        ventana_h=round(VENTANA / 3600, 1),
         ts=ahora,
         error=error,
     )
+
+
+def _visible(d: dict[str, Any], ahora: int) -> bool:
+    """Dado de alta en Pi-hole, o visto en la ventana: en ARP ahora o con DNS reciente."""
+    return d["conocido"] or d["en_arp"] or (d["ultima_dns"] or 0) > ahora - VENTANA
 
 
 async def actualizador() -> None:
