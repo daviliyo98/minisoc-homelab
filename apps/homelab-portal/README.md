@@ -209,6 +209,20 @@ Para que la lista no se llene de aparatos de paso (el móvil de una visita), lo 
 consulta DNS. Los dados de alta se muestran siempre, aunque estén apagados. Al pie de
 la lista se indica cuántos quedan ocultos.
 
+### Alerta de dispositivo nuevo
+
+Cada MAC que aparece por primera vez en la red (ARP o Pi-hole) y no está dada de alta
+en Pi-hole genera una alerta: aviso ámbar en el menú, etiqueta **Nuevo** en la lista,
+y entrada en *Alertas*. También en JSON en `/api/dispositivos/nuevos`, para enviarla
+por Telegram o ntfy.
+
+- **Línea base**: la primera vez que arranca, todo lo que ya hay en la red se guarda
+  sin avisar (tabla `vistos` de la SQLite). Si no, el primer arranque dispararía una
+  alerta por cada aparato de casa y las reales se perderían en el ruido.
+- **Revisado** = dado de alta en Pi-hole: la alerta desaparece. Si no lo reconoces,
+  no lo des de alta sin más: averigua qué es primero.
+- Las alertas se conservan 7 días aunque el aparato se desconecte.
+
 Si un aparato está conectado pero no tiene consultas DNS, probablemente usa un DNS
 fijado de fábrica y se salta Pi-hole (como el iPhone en HL-003).
 

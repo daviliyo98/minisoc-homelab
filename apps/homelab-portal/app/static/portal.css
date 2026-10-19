@@ -542,3 +542,22 @@ tr.mal .vigente { color: var(--error); }
 .cambiar-nombre { margin: 0; font-size: 0.85rem; }
 .pie-lista { margin: 0; padding: 0.8rem 1.5rem; font-size: 0.85rem; }
 @media (max-width: 720px) { .pie-lista { padding: 0.8rem 1rem; } }
+
+/* Dispositivos nuevos: ámbar (revisar), no rojo (caído). */
+.cuenta.aviso { align-self: center; line-height: 1.6; white-space: nowrap; color: var(--boton-texto); background: var(--parcial); border-radius: 999px; padding: 0 0.45rem; font-weight: 600; font-size: 0.75rem; }
+.etq-nuevo { display: inline-block; margin-left: 0.35rem; padding: 0 0.4rem; border-radius: 4px; background: var(--parcial); color: var(--boton-texto); font-size: 0.72rem; font-weight: 600; vertical-align: 0.1em; }
+.alerta-nuevos {
+  margin: 1rem 1.5rem 0; padding: 0.85rem 1.1rem; border-radius: 10px;
+  background: color-mix(in srgb, var(--parcial) 9%, var(--fondo));
+  border: 1px solid color-mix(in srgb, var(--parcial) 55%, transparent);
+}
+.alerta-nuevos h2 { font: 600 1.1rem var(--estrecha); color: var(--parcial); }
+.alerta-nuevos p { margin: 0.3rem 0 0.4rem; font-size: 0.9rem; }
+.alerta-nuevos ul { list-style: none; margin: 0; padding: 0; }
+.alerta-nuevos li { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; padding: 0.15rem 0; }
+.alerta-nuevos a { color: var(--texto); font-weight: 600; }
+.ahora.nuevos-red { background: color-mix(in srgb, var(--parcial) 9%, var(--fondo)); border-color: color-mix(in srgb, var(--parcial) 45%, transparent); }
+.ahora.nuevos-red h2 { color: var(--parcial); }
+.ahora.nuevos-red .led { background: var(--parcial); }
+.ahora.nuevos-red > p { margin: 0.2rem 0 0; font-size: 0.85rem; }
+@media (max-width: 720px) { .alerta-nuevos { margin: 0.75rem 1rem 0; } }

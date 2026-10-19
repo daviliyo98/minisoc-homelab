@@ -21,6 +21,19 @@
   </p>
 </header>
 
+{% if dispositivos.nuevos %}
+  <section class="alerta-nuevos" role="alert" aria-labelledby="t-nuevos">
+    <h2 id="t-nuevos">{{ dispositivos.nuevos|length }} dispositivo{{ 's' if dispositivos.nuevos|length != 1 }} nuevo{{ 's' if dispositivos.nuevos|length != 1 }} en la red</h2>
+    <p>No estaba{{ 'n' if dispositivos.nuevos|length != 1 }} antes y no está{{ 'n' if dispositivos.nuevos|length != 1 }} dado{{ 's' if dispositivos.nuevos|length != 1 }} de alta en Pi-hole. Si lo reconoces, dalo de alta; si no, averigua qué es antes de nada.</p>
+    <ul>
+      {% for n in dispositivos.nuevos %}
+        <li><a href="/dispositivos?destino={{ destino }}&sel={{ n.mac|urlencode }}">{{ n.nombre_red or n.fabricante or n.mac }}</a>
+          <span class="tenue">{{ n.ip or 'sin IP' }}, {{ n.mac }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
 {% if not dispositivos.pihole %}
   <p class="aviso aviso-pagina">Sin <code>PIHOLE_PASSWORD</code> en el <code>.env</code> del portal: solo se ve quién está conectado, no qué consulta cada aparato.</p>
 {% elif dispositivos.error %}
@@ -40,7 +53,7 @@
                {% if ficha_disp and ficha_disp.mac == d.mac %}aria-current="true"{% endif %}>
               <span class="led" aria-hidden="true"></span>
               <span class="c-nombre">
-                <b>{{ nombre(d) }}</b>
+                <b>{{ nombre(d) }}</b>{% if d.nuevo %} <span class="etq-nuevo">Nuevo</span>{% endif %}
                 <span class="c-sub">{{ d.fabricante or d.mac }}</span>
                 <span class="solo-lector">, {{ estado_txt(d.estado) }}</span>
               </span>

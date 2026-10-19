@@ -32,6 +32,8 @@ from typing import Any
 
 import httpx
 
+from . import history
+
 log = logging.getLogger("portal.dispositivos")
 
 CADA = max(30, int(os.environ.get("PORTAL_DISPOSITIVOS_CADA", "60")))
@@ -51,7 +53,7 @@ BLOQUEADAS = {
     "EXTERNAL_BLOCKED_EDE15", "SPECIAL_DOMAIN",
 }
 
-_estado: dict[str, Any] = {"lista": [], "ocultos": 0, "ventana_h": 3, "ts": None, "error": None,
+_estado: dict[str, Any] = {"lista": [], "nuevos": [], "ocultos": 0, "ventana_h": 3, "ts": None, "error": None,
                            "pihole": bool(PIHOLE_CLAVE)}
 _sid: str | None = None
 
@@ -260,10 +262,18 @@ async def refrescar(cliente: httpx.AsyncClient | None = None) -> None:
         act = d["actividad"]
         d["pct_bloqueo"] = round(100 * act["bloqueadas"] / act["muestra"]) if act and act["muestra"] else None
 
+    # Detección de aparatos nuevos: solo con evidencia de que han estado en la red.
+    presentes = [d for d in disp.values() if d["en_arp"] or d["ultima_dns"] or d["conocido"]]
+    history.registrar_vistos(presentes, ahora)
+    nuevas = {n["mac"] for n in history.dispositivos_nuevos(dias=7)}
+    for d in disp.values():
+        d["nuevo"] = d["mac"] in nuevas and not d["conocido"]
+
     orden = {"activo": 0, "conectado": 1, "ausente": 2}
-    visibles = [d for d in disp.values() if _visible(d, ahora)]
+    visibles = [d for d in disp.values() if _visible(d, ahora) or d["nuevo"]]
     _estado.update(
-        lista=sorted(visibles, key=lambda d: (not d["conocido"], orden[d["estado"]], d["ip"] or "~")),
+        lista=sorted(visibles, key=lambda d: (not d["nuevo"], not d["conocido"], orden[d["estado"]], d["ip"] or "~")),
+        nuevos=[d for d in visibles if d["nuevo"]],
         ocultos=len(disp) - len(visibles),
         ventana_h=round(VENTANA / 3600, 1),
         ts=ahora,

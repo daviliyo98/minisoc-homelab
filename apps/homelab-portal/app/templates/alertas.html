@@ -22,6 +22,19 @@
     </section>
   {% endif %}
 
+  {% if nuevos_disp %}
+    <section class="ahora nuevos-red" aria-labelledby="t-nuevos">
+      <h2 id="t-nuevos">Dispositivos nuevos en la red</h2>
+      <p class="tenue">Aparatos que el portal no había visto nunca y que no están dados de alta en Pi-hole (últimos 7 días).</p>
+      <ul>
+        {% for n in nuevos_disp %}
+          <li><a href="/dispositivos?destino={{ destino }}&sel={{ n.mac|urlencode }}"><span class="led" aria-hidden="true"></span>{{ n.nombre_red or n.fabricante or n.mac }}</a>
+              <span class="tenue">primera vez a las {{ n.primera|hora }}, {{ n.ip or 'sin IP' }}, {{ n.mac }}{% if n.fabricante and n.nombre_red %}, {{ n.fabricante }}{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
   {% if not historial %}
     <div class="vacio">
       <p class="vacio-titulo">El historial está desactivado.</p>

@@ -261,7 +261,10 @@ async def inicio(
 async def alertas(request: Request, destino: str = DESTINO, _user: str = Depends(_exigir)):
     """Registro de cambios de estado: cuándo cayó cada cosa y cuándo volvió."""
     ctx = await _comun(request, destino, "alertas")
+    # Aparatos nuevos aún sin dar de alta en Pi-hole (los ya registrados se dan por revisados).
+    revisados = {d["mac"] for d in dispositivos.estado()["lista"] if d["conocido"]}
     ctx.update({
+        "nuevos_disp": [n for n in history.dispositivos_nuevos(dias=7) if n["mac"] not in revisados],
         "eventos": _con_duracion(history.eventos(limite=200)),
         "retencion": history.RETENCION_DIAS,
         "intervalo": history.INTERVALO,
@@ -348,6 +351,16 @@ async def api_eventos(
 ):
     """Cambios de estado en JSON: para un script de alertas o para mandarlos a un SIEM."""
     return {"eventos": history.eventos(servicio or None, limite=limite)}
+
+
+@app.get("/api/dispositivos/nuevos")
+async def api_dispositivos_nuevos(
+    dias: int = Query(7, ge=1, le=30),
+    _user: str = Depends(_exigir),
+):
+    """Aparatos nuevos en la red sin dar de alta en Pi-hole (para un aviso por Telegram/ntfy)."""
+    revisados = {d["mac"] for d in dispositivos.estado()["lista"] if d["conocido"]}
+    return {"nuevos": [n for n in history.dispositivos_nuevos(dias=dias) if n["mac"] not in revisados]}
 
 
 @app.get("/healthz", include_in_schema=False)

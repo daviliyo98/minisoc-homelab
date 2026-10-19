@@ -172,6 +172,73 @@ def desde(servicio: str) -> int | None:
     return ultimo[0]["ts"] if ultimo else None
 
 
+# --- Dispositivos vistos: detección de aparatos nuevos en la red -------------------
+#
+# Un aparato "nuevo" es una MAC que el portal no había visto nunca. La primera vez que
+# se ejecuta, la tabla está vacía y todo lo que hay se guarda como LÍNEA BASE sin
+# avisar: si no, el primer arranque dispararía una alerta por cada aparato de casa y
+# las alertas reales se perderían entre el ruido (fatiga de alertas).
+
+def _tabla_vistos(con: sqlite3.Connection) -> None:
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS vistos ("
+        " mac TEXT PRIMARY KEY, primera INTEGER NOT NULL, ultima INTEGER NOT NULL,"
+        " ip TEXT, fabricante TEXT, nombre_red TEXT, aviso INTEGER NOT NULL DEFAULT 0)"
+    )
+
+
+def registrar_vistos(dispositivos: list[dict[str, Any]], ahora: int | None = None) -> list[str]:
+    """Guarda los aparatos vistos y devuelve las MAC nuevas que merecen alerta."""
+    con = _abrir()
+    if con is None:
+        return []
+    ahora = ahora or int(time.time())
+    nuevas: list[str] = []
+    try:
+        with con:
+            _tabla_vistos(con)
+            linea_base = con.execute("SELECT COUNT(*) FROM vistos").fetchone()[0] == 0
+            conocidas = {m for (m,) in con.execute("SELECT mac FROM vistos")}
+            for d in dispositivos:
+                mac = d["mac"]
+                datos = (d.get("ip"), d.get("fabricante") or "", d.get("nombre_red") or "")
+                if mac in conocidas:
+                    con.execute(
+                        "UPDATE vistos SET ultima = ?, ip = COALESCE(?, ip),"
+                        " fabricante = COALESCE(NULLIF(?, ''), fabricante),"
+                        " nombre_red = COALESCE(NULLIF(?, ''), nombre_red) WHERE mac = ?",
+                        (ahora, *datos, mac),
+                    )
+                    continue
+                # Avisa solo si no es la línea base y el aparato no está dado de alta.
+                aviso = int(not linea_base and not d.get("conocido"))
+                con.execute("INSERT INTO vistos VALUES (?, ?, ?, ?, ?, ?, ?)", (mac, ahora, ahora, *datos, aviso))
+                if aviso:
+                    nuevas.append(mac)
+        if nuevas:
+            log.warning("Dispositivo nuevo en la red: %s", ", ".join(nuevas))
+    except sqlite3.Error as exc:
+        log.warning("No se pudo registrar dispositivos vistos: %s", exc)
+    return nuevas
+
+
+def dispositivos_nuevos(dias: int = 7) -> list[dict[str, Any]]:
+    """Alertas de aparatos nuevos de los últimos días, del más reciente al más antiguo."""
+    con = _abrir()
+    if con is None:
+        return []
+    try:
+        _tabla_vistos(con)
+        filas = con.execute(
+            "SELECT mac, primera, ultima, ip, fabricante, nombre_red FROM vistos"
+            " WHERE aviso = 1 AND primera > ? ORDER BY primera DESC",
+            (int(time.time()) - dias * 86400,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(zip(("mac", "primera", "ultima", "ip", "fabricante", "nombre_red"), f)) for f in filas]
+
+
 async def muestreador() -> None:
     """Bucle de fondo. Nunca termina por un error: lo registra y sigue."""
     if not disponible():
