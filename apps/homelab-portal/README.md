@@ -171,6 +171,15 @@ Decisiones de seguridad, porque esto es lo único del portal que lee datos de in
 - **Una fuente caída no rompe nada**: se conserva el último dato bueno y se indica
   la hora y el error del último intento.
 
+## Ventana de mantenimiento
+
+La copia de seguridad (`scripts/backup-minisoc.sh`, `minisoc-backup.timer` hacia las
+04:30) para los contenedores unos segundos. Para que eso no salga cada noche como caída,
+`PORTAL_MANTENIMIENTO` (por defecto `04:25-04:50`, hora local) define una franja en la
+que no se guardan muestras ni eventos. Si algo sigue caído al terminar la ventana, se
+registra entonces: una caída real se retrasa, no se pierde. Se puede cruzar la
+medianoche (`23:30-00:30`); vacío desactiva la ventana. Ver HL-014.
+
 ## Salud de la Pi
 
 `app/salud.py` lee de **Prometheus** (`PROMETHEUS_URL`, por defecto

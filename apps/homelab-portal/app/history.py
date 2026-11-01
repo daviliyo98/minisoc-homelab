@@ -34,6 +34,50 @@ RETENCION_DIAS = int(os.environ.get("PORTAL_RETENCION_DIAS", "7"))
 _con: sqlite3.Connection | None = None
 _ultimo_estado: dict[str, bool] = {}
 
+# Ventana de mantenimiento diaria ("04:25-04:50", hora local). La copia de seguridad
+# para los contenedores a esa hora: sin la ventana, cada noche saldrían como caídas
+# (alertas falsas que enseñan a ignorar las alertas). Dentro de la ventana no se
+# guardan muestras ni eventos; si algo sigue caído al terminarla, se registra
+# entonces, así que una caída real no se pierde, solo se retrasa hasta el final.
+_VENTANA_TXT = os.environ.get("PORTAL_MANTENIMIENTO", "").strip()
+
+
+def _a_minutos(hhmm: str) -> int:
+    h, m = hhmm.strip().split(":")
+    if not (0 <= int(h) < 24 and 0 <= int(m) < 60):
+        raise ValueError(hhmm)
+    return int(h) * 60 + int(m)
+
+
+def _leer_ventana(texto: str) -> tuple[int, int] | None:
+    if not texto:
+        return None
+    try:
+        ini, fin = (_a_minutos(t) for t in texto.split("-", 1))
+        return (ini, fin) if ini != fin else None
+    except ValueError:
+        log.warning("PORTAL_MANTENIMIENTO no válido (%r): se ignora; formato 04:25-04:50", texto)
+        return None
+
+
+VENTANA_MANTENIMIENTO = _leer_ventana(_VENTANA_TXT)
+
+
+def en_mantenimiento(ts: float | None = None) -> bool:
+    if not VENTANA_MANTENIMIENTO:
+        return False
+    t = time.localtime(ts or time.time())
+    minuto = t.tm_hour * 60 + t.tm_min
+    ini, fin = VENTANA_MANTENIMIENTO
+    return ini <= minuto < fin if ini < fin else (minuto >= ini or minuto < fin)  # cruza medianoche
+
+
+def ventana_texto() -> str | None:
+    if not VENTANA_MANTENIMIENTO:
+        return None
+    ini, fin = VENTANA_MANTENIMIENTO
+    return f"{ini // 60:02d}:{ini % 60:02d}–{fin // 60:02d}:{fin % 60:02d}"
+
 
 def _abrir() -> sqlite3.Connection | None:
     global _con
@@ -84,6 +128,8 @@ def registrar(estados: dict[str, dict[str, Any]], ahora: int | None = None) -> N
     if con is None:
         return
     ahora = ahora or int(time.time())
+    if en_mantenimiento(ahora):
+        return          # ni muestra ni evento: se compara con el estado previo al acabar
     filas, eventos = [], []
     for nombre, e in estados.items():
         if e.get("ok") is None:          # servicio sin sonda: no hay nada que medir

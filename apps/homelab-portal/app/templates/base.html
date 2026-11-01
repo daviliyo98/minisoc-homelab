@@ -102,6 +102,9 @@
       <p class="aviso" role="alert">El portal no pide contraseña porque falta <code>PORTAL_PASSWORD</code> en el <code>.env</code>.
          Vale mientras solo se llegue por el tailnet; no lo publiques así.</p>
     {% endif %}
+    {% if mantenimiento.ahora %}
+      <p class="aviso aviso-mant" role="status">Ventana de mantenimiento ({{ mantenimiento.ventana }}): la copia de seguridad puede parar servicios unos segundos. No se registran caídas hasta que termine.</p>
+    {% endif %}
     {% block contenido %}{% endblock %}
   </div>
 </div>

@@ -595,3 +595,4 @@ tr.mal .vigente { color: var(--error); }
 .tabla-datos { margin-top: 1.5rem; }
 .tabla-datos summary { color: var(--enlace); cursor: pointer; font-weight: 500; }
 .tabla-datos .tabla { margin-top: 0.6rem; }
+.aviso-mant { border-color: var(--linea-fuerte); background: var(--panel); color: var(--tenue); }

@@ -31,6 +31,9 @@ services:
       # ~50 000 filas: unos pocos MB en la microSD.
       PORTAL_POLL: "${PORTAL_POLL:-60}"
       PORTAL_RETENCION_DIAS: "${PORTAL_RETENCION_DIAS:-7}"
+      # Ventana diaria en la que no se registran caídas: la copia de seguridad
+      # (minisoc-backup.timer, ~04:30) para los contenedores unos segundos.
+      PORTAL_MANTENIMIENTO: "${PORTAL_MANTENIMIENTO:-04:25-04:50}"
       # Hora local sin instalar tzdata en la imagen slim: formato POSIX de Madrid.
       TZ: "${TZ_POSIX:-CET-1CEST,M3.5.0,M10.5.0/3}"
       # Ubicación para la sección Entorno. Va en .env (no en services.yaml) porque

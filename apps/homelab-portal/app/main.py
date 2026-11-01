@@ -190,6 +190,7 @@ async def _comun(request: Request, destino: str, seccion: str) -> dict[str, Any]
         "stacks": catalog.stacks(),
         "sin_clave": SIN_CLAVE,
         "historial": history.disponible(),
+        "mantenimiento": {"ventana": history.ventana_texto(), "ahora": history.en_mantenimiento()},
         "entorno": entorno.estado(),
         "dispositivos": dispositivos.estado(),
         "salud": salud.estado(),

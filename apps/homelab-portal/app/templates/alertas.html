@@ -6,7 +6,8 @@
   <div class="cabecera-fila">
     <h1>Alertas</h1>
   </div>
-  <p class="frescura">Cambios de estado de los últimos {{ retencion }} días. El portal comprueba cada servicio cada {{ intervalo }} s.</p>
+  <p class="frescura">Cambios de estado de los últimos {{ retencion }} días. El portal comprueba cada servicio cada {{ intervalo }} s.
+    {% if mantenimiento.ventana %}Ventana de mantenimiento diaria de {{ mantenimiento.ventana }} (copia de seguridad): en esa franja no se registran caídas.{% endif %}</p>
 </header>
 
 <div class="pagina">
