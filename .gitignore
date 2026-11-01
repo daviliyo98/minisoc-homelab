@@ -13,6 +13,10 @@
 *.zip
 *teleporter*
 *backup*
+# ...pero el script y su runbook SÍ van al repo: la regla de arriba los ocultaba
+# en silencio y solo existían en la Pi (HL-014). Los paquetes .tar.zst siguen fuera.
+!scripts/backup-minisoc.sh
+!docs/runbooks/backups.md
 portainer.db
 *.db
 
