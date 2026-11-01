@@ -17,6 +17,8 @@
 # en silencio y solo existían en la Pi (HL-014). Los paquetes .tar.zst siguen fuera.
 !scripts/backup-minisoc.sh
 !docs/runbooks/backups.md
+!host/systemd/minisoc-backup.service
+!host/systemd/minisoc-backup.timer
 portainer.db
 *.db
 

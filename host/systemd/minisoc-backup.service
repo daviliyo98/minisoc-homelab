@@ -1,0 +1,18 @@
+# Copia de /etc/systemd/system/minisoc-backup.service (lo que corre en la Pi).
+# Instalar:  sudo cp host/systemd/minisoc-backup.* /etc/systemd/system/
+#            sudo systemctl daemon-reload && sudo systemctl enable --now minisoc-backup.timer
+[Unit]
+Description=MINISOC: copia de seguridad verificada del homelab
+Documentation=file:/home/pi/minisoc-homelab/docs/runbooks/backups.md
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/minisoc-homelab/scripts/backup-minisoc.sh
+# El script baja contenedores con estado unos segundos; que no lo mate el sistema
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
