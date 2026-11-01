@@ -7,10 +7,17 @@
 #   - etc-pihole (config y blocklists de Pi-hole, vive FUERA del repo)
 #   - los volúmenes Docker con estado persistente
 #   - la configuración de host que no se regenera sola (nftables, sshd, cron)
+#   - Home Assistant (su config/ va dentro del repo) y el historial del portal
 #
 # Por qué para los contenedores antes de copiar: Prometheus usa un TSDB con WAL
-# y Grafana, Portainer y el scanner usan SQLite. Copiar en caliente puede dar un
-# fichero inconsistente que no restaura. La parada es de unos segundos.
+# y Grafana, Portainer, el scanner, Home Assistant y el portal usan SQLite. Copiar
+# en caliente puede dar un fichero inconsistente que no restaura. La parada es de
+# unos segundos.
+#
+# Riesgo aceptado: parar Pi-hole deja la red sin DNS ~4 s (a las 04:3x, cuando nadie
+# navega). Se prefiere a una copia en caliente de su SQLite que podría no restaurar.
+# El portal tiene una ventana de mantenimiento a esa hora (PORTAL_MANTENIMIENTO)
+# para que estas paradas no salgan como caídas.
 #
 # "Verificada" significa que NO basta con generar el fichero: se comprueba el
 # sha256, se lista el contenido y se extrae a un directorio temporal para
@@ -18,6 +25,11 @@
 #
 # Uso:  sudo ~/minisoc-homelab/scripts/backup-minisoc.sh
 set -euo pipefail
+
+# El paquete lleva TODOS los .env con secretos. Sin esto, root crea el .tar.zst con
+# permisos 644 (legible por cualquier usuario de la Pi) y lo mismo el directorio de
+# trabajo en /tmp mientras dura la copia. Con 077 solo root puede leerlos.
+umask 077
 
 FECHA="$(date +%Y%m%d-%H%M)"
 RAIZ="/home/pi/backups"
@@ -30,7 +42,8 @@ REPO="/home/pi/minisoc-homelab"
 PIHOLE_DIR="/data/compose/1/etc-pihole"
 
 # Contenedores con estado persistente que hay que parar para copiar bien.
-CONTAINERS=(grafana prometheus websec-scanner portainer pihole)
+# Pi-hole va el último: así es el que menos tiempo pasa parado (DNS de toda la casa).
+CONTAINERS=(grafana prometheus websec-scanner portainer homeassistant homelab-portal pihole)
 
 # Volúmenes a copiar (nombre -> ruta en el paquete)
 declare -A VOLUMENES=(
@@ -38,6 +51,7 @@ declare -A VOLUMENES=(
   [monitoring_prometheus_data]="prometheus"
   [portainer_data]="portainer"
   [websec-scanner_websec-data]="websec-scanner"
+  [homelab-portal_portal-data]="homelab-portal"   # historial, alertas, dispositivos vistos
 )
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
@@ -59,6 +73,9 @@ restaurar() {
 trap restaurar EXIT
 
 mkdir -p "$RAIZ"
+# El directorio y los paquetes que ya existían (creados antes del umask) solo para root.
+chmod 700 "$RAIZ"
+find "$RAIZ" -maxdepth 1 -type f -name 'minisoc-*' -exec chmod 600 {} +
 
 # --- 1. Preflight ----------------------------------------------------------
 log "=== Backup $FECHA ==="
